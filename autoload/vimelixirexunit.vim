@@ -1,43 +1,4 @@
 
-
-function! vimelixirexunit#boot()
-  call vimelixirexunit#setDefaults()
-
-  if g:vim_elixir_mix_compile != '' | call vimelixirexunit#setMixCompileCommand() | endif
-
-
-endfunction
-
-function! vimelixirexunit#setDefaults() "{{{
-  if !exists('g:vim_elixir_exunit_shell')
-      let g:vim_elixir_exunit_shell = &shell
-  endif
-
-  call s:setGlobal('g:vim_elixir_mix_compile', 1)
-  "call s:setGlobal('g:vim_elixir_exunit_manage_indents', 1)
-  "call s:setGlobal('g:vim_elixir_exunit_manage_search', 1)
-  "call s:setGlobal('g:vim_elixir_exunit_manage_completition', 1)
-endfunction "}}}
-
-function vimelixirexunit#setMixCompileCommand()
-    command! -bar EU call vimelixirexunit#runMixCompileCommand()
-    map <Leader>aa :EU<CR>
-endfunction 
-
-
-function vimelixirexunit#runMixCompileCommand()
-
-    let mixDir = vimelixirexunit#findMixDirectory()
-
-    let compilerDef = {
-        \ "makeprg": "mix compile",
-        \ "cwd": mixDir,
-        \ "errorformat": "\%E\ \ %n)\ %m"
-        \ }
-
-    let errors = s:runCompiler(compilerDef)
-    debug echo "asd"
-
 "let s:cpo_save = &cpo
 "set cpo-=C
 "CompilerSet makeprg=mix\ test
@@ -53,9 +14,52 @@ function vimelixirexunit#runMixCompileCommand()
 "let &cpo = s:cpo_save
 "unlet s:cpo_save
 
-endfunction
+"%C\ %.%#,%E==\ Compilation\ error\ on\ file\ %f ==%n**\ (CompileError)\ %f:%l:%m%Z
+" ",%E==\ Compilation\ error\ on\ file\ %f\ ==%Z%m'
+" \ "mix_compile": '%C\\ %.%#'
+let s:ERROR_FORMATS = {
+            \ "mix_compile": '%E**\ (CompileError)\ %f:%l:\ %m'
+            \ }
 
-function! vimelixirexunit#findMixDirectory()
+function! vimelixirexunit#boot() " {{{
+  call vimelixirexunit#setDefaults()
+
+  if g:vim_elixir_mix_compile != '' | call vimelixirexunit#setMixCompileCommand() | endif
+
+
+endfunction " }}}
+
+function! vimelixirexunit#setDefaults() "{{{
+  if !exists('g:vim_elixir_exunit_shell')
+      let g:vim_elixir_exunit_shell = &shell
+  endif
+
+  call s:setGlobal('g:vim_elixir_mix_compile', 1)
+  "call s:setGlobal('g:vim_elixir_exunit_manage_indents', 1)
+  "call s:setGlobal('g:vim_elixir_exunit_manage_search', 1)
+  "call s:setGlobal('g:vim_elixir_exunit_manage_completition', 1)
+endfunction "}}}
+
+function vimelixirexunit#setMixCompileCommand() " {{{
+    command! -bar EU call vimelixirexunit#runMixCompileCommand()
+    map <Leader>aa :EU<CR>
+endfunction " }}}
+
+function vimelixirexunit#runMixCompileCommand() " {{{
+
+    let mixDir = vimelixirexunit#findMixDirectory()
+
+    let compilerDef = {
+        \ "makeprg": "mix compile",
+        \ "target": "qfkeep",
+        \ "cwd": mixDir,
+        \ "errorformat": s:ERROR_FORMATS['mix_compile']
+        \ }
+
+    let errors = s:runCompiler(compilerDef)
+endfunction " }}}
+
+function! vimelixirexunit#findMixDirectory() "{{{
     let fName = expand("%:p:h")
 
     while 1
@@ -71,25 +75,52 @@ function! vimelixirexunit#findMixDirectory()
         endif
         let fName = fNameNew
     endwhile
-endfunction
+endfunction "}}}
 
-function! vimelixirexunit#testParseErrorLines(format, content)
-    return s:parseErrorLines({"errorformat": a:format}, a:content)
-endfunction
+function! vimelixirexunit#testParseErrorLines(formatType, content) "{{{
+    let options = {
+                \ "errorformat": s:ERROR_FORMATS[a:formatType], 
+                \ 'target': "llist",
+                \ 'leave_valid': 1
+                \ }
+    return s:parseErrorLines(options, a:content)
+endfunction "}}}
 
 function! s:parseErrorLines(options, content) " {{{
     let old_local_errorformat = &l:errorformat
     let old_errorformat = &errorformat
-    
+
+    let err_lines = split(a:content, "\n", 1)
+
+    let err_format = ''
     if has_key(a:options, 'errorformat')
-        let &errorformat = a:options['errorformat']
+        let err_format = a:options['errorformat']
+    endif
+
+    if has_key(a:options, 'cwd')
+        " hack to make error resolving work correctly
+        call insert(err_lines, "**WorkingDirectory**".escape(a:options['cwd'], ' ')."\n")
+        if err_format != ''
+            let err_format = "%D**WorkingDirectory**%f,".err_format
+        endif
+    endif
+
+    if err_format != ''
+        let &errorformat = err_format
         set errorformat<
     endif
 
-    let err_lines = split(a:content, "\n", 1)
-    lgetexpr err_lines
+    if a:options['target'] == 'llist'
+        lgetexpr err_lines
+        let errors = deepcopy(getloclist(0))
+    elseif a:options['target'] =~ '^qf'
+        cgetexpr err_lines
+        let errors = deepcopy(getqflist())
+    endif
 
-    let errors = deepcopy(getloclist(0))
+    if has_key(a:options, 'leave_valid')
+        call filter(errors, "v:val['valid']")
+    endif
 
     let &errorformat = old_errorformat
     let &l:errorformat = old_local_errorformat
@@ -97,33 +128,51 @@ function! s:parseErrorLines(options, content) " {{{
     return errors
 endfunction " }}}
 
-
 function! s:runCompiler(options) " {{{
-    " save options and locale env variables {{{
+    " save options and locale env variables
     let old_cwd = getcwd()
-    " }}}
-    
-    if has_key(a:options, 'cwd')
-        execute 'lcd ' . fnameescape(a:options['cwd'])
+
+    let options = deepcopy(a:options)
+
+    if !has_key(options, 'target')
+        let options['target'] = 'llist'
     endif
 
-    let error_content = s:system(a:options['makeprg'])
+    if has_key(options, 'cwd')
+        execute 'lcd ' . fnameescape(options['cwd'])
+    endif
 
-    if has_key(a:options, 'cwd')
+    let error_content = s:system(options['makeprg'])
+
+    if has_key(options, 'cwd')
         execute 'lcd ' . fnameescape(old_cwd)
     endif
 
-    let errors = s:parseErrorLines(a:options, error_content)
+    let errors = s:parseErrorLines(options, error_content)
 
-    try
-        silent lolder
-    catch /\m^Vim\%((\a\+)\)\=:E380/
-        " E380: At bottom of quickfix stack
-        call setloclist(0, [], 'r')
-    catch /\m^Vim\%((\a\+)\)\=:E776/
-        " E776: No location list
-        " do nothing
-    endtry
+    if options['target'] == 'llist'
+        try
+            silent lolder
+        catch /\m^Vim\%((\a\+)\)\=:E380/
+            " E380: At bottom of quickfix stack
+            call setloclist(0, [], 'r')
+        catch /\m^Vim\%((\a\+)\)\=:E776/
+            " E776: No location list
+            " do nothing
+        endtry
+    elseif options['target'] == 'qf'
+        try
+            silent colder
+        catch /\m^Vim\%((\a\+)\)\=:E380/
+            " E380: At bottom of quickfix stack
+            call setqflist(0, [], 'r')
+        catch /\m^Vim\%((\a\+)\)\=:E776/
+            " E776: No location list
+            " do nothing
+        endtry
+    elseif options['target'] == 'qfkeep'
+        " no nothing
+    endif
 
     return errors
 endfunction " }}}
