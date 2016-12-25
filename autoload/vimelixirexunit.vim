@@ -1,4 +1,28 @@
 
+" add possibility to
+"
+" - run ExUnit test and parse output 
+"   - compile error
+"   - test failure - assert fail
+"   - test failure - GenServer crash
+"   - test failure - other???
+" - show symbols for failing tests
+" - shortcut to see current test's fail message
+" - run all test suite/current test file/test under cursor
+" - rerun last test
+" - automatically rerun last test on saving any ex/exs file from current
+"   project
+"
+"   only in Vim8.0 with jobs support
+"
+" - allow recompile on each ex/exs save
+" - notify in airline that there are compile errors
+" - use async jobs for on-save compile/test runs (only Vim 8.x)
+"   allow killing tests as soon as first error is received/parsed (run with
+"   -seed 0 to have consistent sequence)
+"
+
+
 "let s:cpo_save = &cpo
 "set cpo-=C
 "CompilerSet makeprg=mix\ test
@@ -14,11 +38,22 @@
 "let &cpo = s:cpo_save
 "unlet s:cpo_save
 
-"%C\ %.%#,%E==\ Compilation\ error\ on\ file\ %f ==%n**\ (CompileError)\ %f:%l:%m%Z
-" ",%E==\ Compilation\ error\ on\ file\ %f\ ==%Z%m'
-" \ "mix_compile": '%C\\ %.%#'
 let s:ERROR_FORMATS = {
-            \ "mix_compile": '%E**\ (CompileError)\ %f:%l:\ %m'
+            \ "mix_compile": 
+                \'%-G%[\ ]%[\ ]%[\ ]%#(%.%#,'.
+                \'%E**\ (%[A-Z]%[%^)]%#)\ %f:%l:\ %m,'.
+                \'%Z%^%[\ ]%#%$,'.
+                \'%W%>warning:\ %m,'.
+                \'%-C\ \ %f:%l,'.
+                \'%-G==\ Compilation error%.%#,'.
+                \'%-G%[\ ]%#',
+            \ "mix_compile_errors_only": 
+                \ "%-D**CWD**%f,".
+                \'%-G==\ Compilation error%.%#,'.
+                \'%-Gwarning:%.%#,'.
+                \'%-G%[\ ]%#,'.
+                \'%-G\ %.%#,'.
+                \'%E**\ (%[%^)]%#)\ %f:%l:\ %m'
             \ }
 
 function! vimelixirexunit#boot() " {{{
@@ -35,18 +70,28 @@ function! vimelixirexunit#setDefaults() "{{{
   endif
 
   call s:setGlobal('g:vim_elixir_mix_compile', 1)
-  "call s:setGlobal('g:vim_elixir_exunit_manage_indents', 1)
-  "call s:setGlobal('g:vim_elixir_exunit_manage_search', 1)
-  "call s:setGlobal('g:vim_elixir_exunit_manage_completition', 1)
+
+  "call s:setGlobal('g:vim_elixir_exunit_tests', 1)
+  "call s:setGlobal('g:vim_elixir_exunit_rerun_on_save', 1)
+  "call s:setGlobal('g:vim_elixir_exunit_symbols', 1)
+
 endfunction "}}}
 
 function vimelixirexunit#setMixCompileCommand() " {{{
-    command! -bar EU call vimelixirexunit#runMixCompileCommand()
-    map <Leader>aa :EU<CR>
+    let mixDir = vimelixirexunit#findMixDirectory()
+
+    if mixDir != ''
+        let &l:makeprg="cd ".escape(mixDir, " ").";".
+                    \ "(echo '**CWD**".escape(mixDir, " ")."';".
+                    \ "mix compile)"
+        let &l:errorformat = s:ERROR_FORMATS['mix_compile_errors_only'] 
+    endif
+
+    command! -bar MixCompile call vimelixirexunit#runMixCompileCommand()
+    map <silent> <buffer> <Leader>aa :MixCompile<CR>
 endfunction " }}}
 
 function vimelixirexunit#runMixCompileCommand() " {{{
-
     let mixDir = vimelixirexunit#findMixDirectory()
 
     let compilerDef = {
@@ -71,19 +116,10 @@ function! vimelixirexunit#findMixDirectory() "{{{
         let fNameNew = fnamemodify(fName, ":h")
         " after we reached top of heirarchy
         if fNameNew == fName
-            return 0
+            return ''
         endif
         let fName = fNameNew
     endwhile
-endfunction "}}}
-
-function! vimelixirexunit#testParseErrorLines(formatType, content) "{{{
-    let options = {
-                \ "errorformat": s:ERROR_FORMATS[a:formatType], 
-                \ 'target': "llist",
-                \ 'leave_valid': 1
-                \ }
-    return s:parseErrorLines(options, a:content)
 endfunction "}}}
 
 function! s:parseErrorLines(options, content) " {{{
@@ -98,10 +134,11 @@ function! s:parseErrorLines(options, content) " {{{
     endif
 
     if has_key(a:options, 'cwd')
-        " hack to make error resolving work correctly
-        call insert(err_lines, "**WorkingDirectory**".escape(a:options['cwd'], ' ')."\n")
+        " hack to make path resolving work correctly
+        " output and search pattern prepended with absolute directory path
+        call insert(err_lines, "**CWD**".escape(a:options['cwd'], ' ')."\n")
         if err_format != ''
-            let err_format = "%D**WorkingDirectory**%f,".err_format
+            let err_format = "%-D**CWD**%f,".err_format
         endif
     endif
 
@@ -199,14 +236,14 @@ endfunction " }}}
 
 
 " Get the value of a Vim variable.  Allow local variables to override global ones.
-function! s:rawVar(name, ...) abort " {{{2
+function! s:rawVar(name, ...) abort " {{{
     return get(b:, a:name, get(g:, a:name, a:0 > 0 ? a:1 : ''))
-endfunction " }}}2
+endfunction " }}}
 
 " Get the value of a syntastic variable.  Allow local variables to override global ones.
-function! s:var(name, ...) abort " {{{2
+function! s:var(name, ...) abort " {{{
     return call('s:rawVar', ['vim_elixir_exunit_' . a:name] + a:000)
-endfunction " }}}2
+endfunction " }}}
 
 
 function s:system(command) abort "{{{
@@ -231,5 +268,15 @@ function s:system(command) abort "{{{
 endfunction "}}}
 
 
+function! vimelixirexunit#testParseErrorLines(formatType, content) "{{{
+    " utility API just to allow rspec
+    let options = {
+                \ "errorformat": s:ERROR_FORMATS[a:formatType], 
+                \ 'target': "llist",
+                \ 'leave_valid': 0
+                \ }
+    return s:parseErrorLines(options, a:content)
+endfunction "}}}
 
 " vim: set sw=4 sts=4 et fdm=marker:
+"

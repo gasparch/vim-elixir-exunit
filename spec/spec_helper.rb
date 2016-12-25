@@ -8,13 +8,30 @@ require 'pry'
 
 class Buffer
   def initialize(vim, type)
-    @file = ".fixture.#{type}"
+    @mix_file = "mix.exs"
+    write_mix_exs
+
+    Dir.mkdir("lib")
+
+    @file = "lib/fixture.#{type}"
     @vim = vim
   end
 
   def get_parsed_errors(content, error_type)
-    @vim.command "echo vimelixirexunit#testParseErrorLines('#{error_type}', '#{content}')"
+    result = @vim.command "echo vimelixirexunit#testParseErrorLines('#{error_type}', '#{content}')"
+    result.gsub(/ 'bufnr': \d+,/, '').gsub(/ 'pattern': '',/, '')
   end
+
+  def get_quickfix_output(content, command) 
+    result = ''
+    with_file content do
+      @vim.command command
+      @vim.command "copen"
+      result = @vim.command 'echo join(getline(0, "$"), "\\n")'
+    end
+    result
+  end
+
 
   def messages_clear
     @vim.command ':messages clear'
@@ -26,21 +43,39 @@ class Buffer
 
   private
 
-  #def with_file(content = nil)
-  #  edit_file(content)
+  def write_mix_exs
+    content=<<~EOF
+defmodule OddsFeed.Mixfile do
+  use Mix.Project
+  def project do
+    [app: :test,
+     version: "0.1.0",
+     elixir: "~> 1.3",
+     deps: [],
+     aliases: []
+   ]
+  end
+end    
 
-  #  yield if block_given?
+    EOF
+    File.write(@mix_file, content)
+  end
 
-  #  @vim.write
-  #  IO.read(@file)
-  #end
+  def with_file(content = nil)
+    edit_file(content)
 
-  #def edit_file(content)
-  #  File.write(@file, content) if content
+    yield if block_given?
 
-  #  @vim.edit @file
-  #  @vim.normal ':set ft=elixir<CR>'
-  #end
+    @vim.write
+    IO.read(@file)
+  end
+
+  def edit_file(content)
+    File.write(@file, content) if content
+
+    @vim.edit @file
+    @vim.normal ':set ft=elixir<CR>'
+  end
 end
 
 class Differ
@@ -89,13 +124,48 @@ RSpec::Matchers.define :be_matching_error do |error_type, expected_result|
   end
 end
 
+RSpec::Matchers.define :be_quickfix_content do |command, expected_result|
+  buffer = Buffer.new(VIM, :ex)
+
+  if command == 'make'
+    run_command = ":make"
+  elsif command == "MixCompile"
+    run_command = ":MixCompile"
+  end
+
+  expand_result = expected_result.gsub(/%%DIRNAME%%/, Dir.pwd).gsub(/\n$/, '')
+
+  match_result = ''
+
+  match do |code|
+    match_result = buffer.get_quickfix_output(code, run_command) 
+    match_result == expand_result
+  end
+
+  failure_message do |code|
+    #buffer.messages_clear
+    #result = buffer.get_quickfix_output(code, run_command)
+    messages = buffer.messages
+
+    result = match_result
+
+    <<~EOM
+    Vim echo messages:
+    #{messages}
+
+    Diff:
+    #{Differ.diff(result, expand_result)}
+    EOM
+  end
+end
+
 Vimrunner::RSpec.configure do |config|
   config.reuse_server = true
 
   config.start_vim do
     VIM = Vimrunner.start_gvim
-    VIM.add_plugin(File.expand_path('..', __dir__), 'ftplugin/elixir.vim')
     VIM.add_plugin(File.expand_path('..', __dir__), 'autoload/vimelixirexunit.vim')
+    VIM.add_plugin(File.expand_path('..', __dir__), 'ftplugin/elixir.vim')
     VIM
   end
 end
