@@ -26,12 +26,12 @@ class Buffer
     @vim = vim
   end
 
-  def get_parsed_errors(content, error_type)
-    result = @vim.command "echo vimelixirexunit#testParseErrorLines('#{error_type}', '#{content}')"
+  def get_parsed_errors(content, error_type, leave=1)
+    result = @vim.command "echo vimelixirexunit#testParseErrorLines('#{error_type}', #{content.dump}, #{leave})"
     result.gsub(/ 'bufnr': \d+,/, '').gsub(/ 'pattern': '',/, '')
   end
 
-  def get_quickfix_output(content, command) 
+  def get_quickfix_output(content, command)
     result = ''
     with_file content do
       @vim.command command
@@ -47,7 +47,7 @@ class Buffer
         print "\n-- parsed err ---\n"
         print result
         print "\n--------------------------------\n"
-        exit!(123)
+        #exit!(123)
       end
 
       result
@@ -77,7 +77,7 @@ defmodule OddsFeed.Mixfile do
      aliases: []
    ]
   end
-end    
+end
 
     EOF
     File.write(@mix_file, content)
@@ -134,6 +134,8 @@ end
 
 RSpec::Matchers.define :be_matching_error do |error_type, expected_result|
   buffer = Buffer.new(VIM, :ex)
+
+  expected_result = expected_result.gsub(/\n$/, '')
 
   match do |code|
     buffer.get_parsed_errors(code, error_type) == expected_result
@@ -203,7 +205,7 @@ RSpec::Matchers.define :be_test_output do |command, expected_result|
   match_result = ''
 
   match do |code|
-    match_result = buffer.get_quickfix_output(code, run_command) 
+    match_result = buffer.get_quickfix_output(code, run_command)
     match_result = match_result.gsub(/<\d+\.\d+\.\d+(\.\d+)?>/, '')
 
     lines = match_result.
