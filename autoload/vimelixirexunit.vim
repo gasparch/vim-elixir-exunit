@@ -105,7 +105,7 @@ let s:ERROR_FORMATS = {
 " exunit_run
 " load directory
 " skip empty lines
-" 
+"
 "
 "
 
@@ -176,8 +176,13 @@ function vimelixirexunit#setExUnitRunCommands() " {{{
     endif
 
     command! -bar ExUnitRunAll call vimelixirexunit#runExUnitRunCommand('all')
-    map <silent> <buffer> <Leader>bb :ExUnitRunAll<CR>
     command! -bar ExUnitRunFile call vimelixirexunit#runExUnitRunCommand('file')
+    command! -bar ExUnitRunLine call vimelixirexunit#runExUnitRunCommand('line')
+
+    command! -bar ExUnitWatchFile call vimelixirexunit#runExUnitRunCommand('watch/file')
+    command! -bar ExUnitWatchLine call vimelixirexunit#runExUnitRunCommand('watch/line')
+
+    map <silent> <buffer> <Leader>bb :ExUnitRunAll<CR>
 endfunction " }}}
 
 
@@ -185,20 +190,47 @@ function vimelixirexunit#runExUnitRunCommand(mode) " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
 
     let makeprg = ''
-    if a:mode == 'all'
-        let makeprg = 'mix test'
-    elseif a:mode == 'file'
-        let fileName = expand('%:p')
-        let fileName = substitute(fileName, mixDir . "/", '', '')
 
-        let makeprg = 'mix test ' . escape(fileName, " ")
+    let matches = split(a:mode, '/')
+
+    let run_in_terminal = 0
+    let mix_cmd = 'mix test'
+    if len(matches) == 1
+        let mode = matches[0]
+    else
+        let mode = matches[1]
+        let run_in_terminal = 1
+        let mix_cmd = 'mix test.watch'
+    endif
+
+    if mode == 'all'
+        let makeprg = mix_cmd
+    elseif mode == 'file'
+        let fileName = expand('%:p')
+        let fileName = substitute(fileName, mixDir . '/', '', '')
+
+        let makeprg = mix_cmd . ' ' . escape(fileName, ' ')
+    elseif mode == 'line'
+        let fileName = expand('%:p')
+        let fileName = substitute(fileName, mixDir . '/', '', '')
+
+        let makeprg = mix_cmd . ' ' . escape(fileName, ' ') . ':' . line('.')
     end
 
+    if run_in_terminal
+        let title = shellescape('ExUnit ' . expand('%:f'))
+        let args  = g:vimide_terminal_run_args
+        let args  = substitute(args, '%CMD%', shellescape(makeprg), '')
+        let args  = substitute(args, '%TITLE%', title, '')
+
+        let makeprg = g:vimide_terminal . ' ' . args . '&'
+    endif
+
     let compilerDef = {
-        \ "makeprg": makeprg,
-        \ "target": "qfkeep",
-        \ "cwd": mixDir,
-        \ "errorformat": s:ERROR_FORMATS['exunit_run']
+        \ 'makeprg': makeprg,
+        \ 'target': 'qfkeep',
+        \ 'cwd': mixDir,
+        \ 'errorformat': s:ERROR_FORMATS['exunit_run']
         \ }
 
     let errors = s:runCompiler(compilerDef)
