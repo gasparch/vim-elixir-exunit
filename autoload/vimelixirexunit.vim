@@ -1,7 +1,10 @@
 
 " add possibility to
 "
-" - run ExUnit test and parse output 
+" - add 'force' argument to MixCompile command for full project recompile to
+"   see all warnings
+"
+" - run ExUnit test and parse output
 "   - compile error
 "   - test failure - assert fail
 "   - test failure - GenServer crash
@@ -38,8 +41,27 @@
 "let &cpo = s:cpo_save
 "unlet s:cpo_save
 
+
+
+"  1) test truth (A)
+"     test/fixture_test.exs:3
+"     Assertion with == failed
+"     code: 2 == 1
+"     lhs:  2
+"     rhs:  1
+"     stacktrace:
+"       test/fixture_test.exs:4: (test)
+
+
+
+"Finished in 0.05 seconds
+"1 test, 1 failure
+
+"Randomized with seed 669689
+
+
 let s:ERROR_FORMATS = {
-            \ "mix_compile": 
+            \ "mix_compile":
                 \'%-G%[\ ]%[\ ]%[\ ]%#(%.%#,'.
                 \'%E**\ (%[A-Z]%[%^)]%#)\ %f:%l:\ %m,'.
                 \'%Z%^%[\ ]%#%$,'.
@@ -47,19 +69,56 @@ let s:ERROR_FORMATS = {
                 \'%-C\ \ %f:%l,'.
                 \'%-G==\ Compilation error%.%#,'.
                 \'%-G%[\ ]%#',
-            \ "mix_compile_errors_only": 
+            \ "mix_compile_errors_only":
                 \ "%-D**CWD**%f,".
                 \'%-G==\ Compilation error%.%#,'.
                 \'%-Gwarning:%.%#,'.
                 \'%-G%[\ ]%#,'.
                 \'%-G\ %.%#,'.
-                \'%E**\ (%[%^)]%#)\ %f:%l:\ %m'
+                \'%E**\ (%[%^)]%#)\ %f:%l:\ %m',
+            \ "exunit_run":
+                \  '%-D**CWD**%f,' .
+                \  '%-G%\\s%#,'.
+                \  '%-GGenerated\ %.%#\ app,'.
+                \  '%-A=ERROR REPORT%.%#,'.
+                \  '%-G**\ %\\S%.%#,'.
+                \   '%Z\ %#,'.
+                \ '%E%>\ \ %n)\ %m,' .
+                \   '%C\ \ \ \ \ %f:%l,'.
+                \  '%+C\ \ \ \ \ **\ %m,'.
+                \ '%Z%>\ \ \ \ \ stacktrace:,'.
+                \  '%+G\ \ \ \ \ %#**%.%#,'.
+                \  '%+G\ \ \ \ \ %\\w%m,'.
+                \   '%A\ \ \ \ \ \ %\\+(%\\w%\\+)\ %f:%l:\ %m,'.
+                \   '%E\ \ \ \ \ \ %f:%l:\ %m,'.
+                \'%-G%>warning:%.%#,'.
+                \  '%-G\ \ %f:%.%#,'.
+                \  '%-G\ \ \ \ \ %#%[[{(]%.%#,'.
+                \  '%-G\ \ \ \ \ \ \ \ \ %#%[a-z]%.%#,'.
+                \ ""
             \ }
+
+
+                "\  '%-G\ \ \ \ \ %#%[[{(]%.%#,'.
+
+
+" exunit_run
+" load directory
+" skip empty lines
+" 
+"
+"
+
+
+                "\ "%C\ \ \ \ \ %f:%l,".
+                "\ '%+G\ \ \ \ \ stacktrace:,'.
+                "\ '%C\ \ \ \ \ \ \ %f:%l:%.%#,'.
 
 function! vimelixirexunit#boot() " {{{
   call vimelixirexunit#setDefaults()
 
-  if g:vim_elixir_mix_compile != '' | call vimelixirexunit#setMixCompileCommand() | endif
+  if g:vim_elixir_mix_compile != ''  | call vimelixirexunit#setMixCompileCommand() | endif
+  if g:vim_elixir_exunit_tests != '' | call vimelixirexunit#setExUnitRunCommands() | endif
 
 
 endfunction " }}}
@@ -70,13 +129,14 @@ function! vimelixirexunit#setDefaults() "{{{
   endif
 
   call s:setGlobal('g:vim_elixir_mix_compile', 1)
+  call s:setGlobal('g:vim_elixir_exunit_tests', 1)
 
-  "call s:setGlobal('g:vim_elixir_exunit_tests', 1)
   "call s:setGlobal('g:vim_elixir_exunit_rerun_on_save', 1)
   "call s:setGlobal('g:vim_elixir_exunit_symbols', 1)
 
 endfunction "}}}
 
+" support MixCompile
 function vimelixirexunit#setMixCompileCommand() " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
 
@@ -84,7 +144,7 @@ function vimelixirexunit#setMixCompileCommand() " {{{
         let &l:makeprg="cd ".escape(mixDir, " ").";".
                     \ "(echo '**CWD**".escape(mixDir, " ")."';".
                     \ "mix compile)"
-        let &l:errorformat = s:ERROR_FORMATS['mix_compile_errors_only'] 
+        let &l:errorformat = s:ERROR_FORMATS['mix_compile_errors_only']
     endif
 
     command! -bar MixCompile call vimelixirexunit#runMixCompileCommand()
@@ -99,6 +159,46 @@ function vimelixirexunit#runMixCompileCommand() " {{{
         \ "target": "qfkeep",
         \ "cwd": mixDir,
         \ "errorformat": s:ERROR_FORMATS['mix_compile']
+        \ }
+
+    let errors = s:runCompiler(compilerDef)
+endfunction " }}}
+
+" support ExUnitRun* commands
+function vimelixirexunit#setExUnitRunCommands() " {{{
+    let mixDir = vimelixirexunit#findMixDirectory()
+
+    if mixDir != ''
+        let &l:makeprg="cd ".escape(mixDir, " ").";".
+                    \ "(echo '**CWD**".escape(mixDir, " ")."';".
+                    \ "mix compile)"
+        let &l:errorformat = s:ERROR_FORMATS['mix_compile_errors_only']
+    endif
+
+    command! -bar ExUnitRunAll call vimelixirexunit#runExUnitRunCommand('all')
+    map <silent> <buffer> <Leader>bb :ExUnitRunAll<CR>
+    command! -bar ExUnitRunFile call vimelixirexunit#runExUnitRunCommand('file')
+endfunction " }}}
+
+
+function vimelixirexunit#runExUnitRunCommand(mode) " {{{
+    let mixDir = vimelixirexunit#findMixDirectory()
+
+    let makeprg = ''
+    if a:mode == 'all'
+        let makeprg = 'mix test'
+    elseif a:mode == 'file'
+        let fileName = expand('%:p')
+        let fileName = substitute(fileName, mixDir . "/", '', '')
+
+        let makeprg = 'mix test ' . escape(fileName, " ")
+    end
+
+    let compilerDef = {
+        \ "makeprg": makeprg,
+        \ "target": "qfkeep",
+        \ "cwd": mixDir,
+        \ "errorformat": s:ERROR_FORMATS['exunit_run']
         \ }
 
     let errors = s:runCompiler(compilerDef)
@@ -161,9 +261,15 @@ function! s:parseErrorLines(options, content) " {{{
 
     let &errorformat = old_errorformat
     let &l:errorformat = old_local_errorformat
-    
+
     return errors
 endfunction " }}}
+
+" solely for debug
+let s:dump_error_content=''
+function! ShowContent()
+    echo s:dump_error_content
+endfunction
 
 function! s:runCompiler(options) " {{{
     " save options and locale env variables
@@ -184,6 +290,8 @@ function! s:runCompiler(options) " {{{
     if has_key(options, 'cwd')
         execute 'lcd ' . fnameescape(old_cwd)
     endif
+
+    let s:dump_error_content=error_content
 
     let errors = s:parseErrorLines(options, error_content)
 
@@ -271,7 +379,7 @@ endfunction "}}}
 function! vimelixirexunit#testParseErrorLines(formatType, content) "{{{
     " utility API just to allow rspec
     let options = {
-                \ "errorformat": s:ERROR_FORMATS[a:formatType], 
+                \ "errorformat": s:ERROR_FORMATS[a:formatType],
                 \ 'target': "llist",
                 \ 'leave_valid': 0
                 \ }

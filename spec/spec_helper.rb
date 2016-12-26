@@ -9,11 +9,20 @@ require 'pry'
 class Buffer
   def initialize(vim, type)
     @mix_file = "mix.exs"
+    @test_helper = "test/test_helper.exs"
+
     write_mix_exs
 
-    Dir.mkdir("lib")
+    if type == :test_exs
+      Dir.mkdir("test")
+      write_test_helper
+      type = :exs
+      @file = "test/fixture_test.#{type}"
+    else
+      Dir.mkdir("lib")
+      @file = "lib/fixture.#{type}"
+    end
 
-    @file = "lib/fixture.#{type}"
     @vim = vim
   end
 
@@ -28,10 +37,23 @@ class Buffer
       @vim.command command
       @vim.command "copen"
       result = @vim.command 'echo join(getline(0, "$"), "\\n")'
+      result = result.gsub(/\s*$/, '')
+
+      if false
+        locresult = @vim.command ":call ShowContent()"
+        @vim.command ":qa!"
+        print "---- raw output -\n"
+        print locresult
+        print "\n-- parsed err ---\n"
+        print result
+        print "\n--------------------------------\n"
+        exit!(123)
+      end
+
+      result
     end
     result
   end
-
 
   def messages_clear
     @vim.command ':messages clear'
@@ -61,6 +83,13 @@ end
     File.write(@mix_file, content)
   end
 
+  def write_test_helper
+    content=<<~EOF
+ExUnit.start()
+    EOF
+    File.write(@test_helper, content)
+  end
+
   def with_file(content = nil)
     edit_file(content)
 
@@ -76,6 +105,7 @@ end
     @vim.edit @file
     @vim.normal ':set ft=elixir<CR>'
   end
+
 end
 
 class Differ
@@ -138,7 +168,49 @@ RSpec::Matchers.define :be_quickfix_content do |command, expected_result|
   match_result = ''
 
   match do |code|
+    match_result = buffer.get_quickfix_output(code, run_command)
+    match_result == expand_result
+  end
+
+  failure_message do |code|
+    #buffer.messages_clear
+    #result = buffer.get_quickfix_output(code, run_command)
+    messages = buffer.messages
+
+    result = match_result
+
+    <<~EOM
+    Vim echo messages:
+    #{messages}
+
+    Diff:
+    #{Differ.diff(result, expand_result)}
+    EOM
+  end
+end
+
+RSpec::Matchers.define :be_test_output do |command, expected_result|
+  buffer = Buffer.new(VIM, :test_exs)
+
+  if command == 'ExUnitRunAll'
+    run_command = ":ExUnitRunAll"
+  elsif command == "MixCompile11123"
+    run_command = ":MixCompile123123"
+  end
+
+  expand_result = expected_result.gsub(/%%DIRNAME%%/, Dir.pwd).gsub(/\n$/, '')
+
+  match_result = ''
+
+  match do |code|
     match_result = buffer.get_quickfix_output(code, run_command) 
+    match_result = match_result.gsub(/<\d+\.\d+\.\d+(\.\d+)?>/, '')
+
+    lines = match_result.
+      split(/\n/).
+      find_all {|x| x !~ /Finished in/ && x !~ /Randomized/}
+
+    match_result = lines.join("\n")
     match_result == expand_result
   end
 
