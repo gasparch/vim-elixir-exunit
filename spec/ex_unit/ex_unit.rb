@@ -20,6 +20,55 @@ end
     EOF
   end # }}}
 
+  it "compilation error(undefined function)" do # {{{
+    content = <<~EOF
+|| **CWD**%%DIRNAME%%
+test/fixture_test.exs|4 error| undefined function call/0
+EOF
+
+    expect(<<~EOF).to be_test_output("ExUnitRunAll", content)
+defmodule A do
+  use ExUnit.Case
+  test "truth" do
+    call()
+  end
+end
+    EOF
+  end # }}}
+
+  it "compilation error(missing do)" do # {{{
+    content = <<~EOF
+|| **CWD**%%DIRNAME%%
+test/fixture_test.exs|6 error| unexpected token: end
+EOF
+
+    expect(<<~EOF).to be_test_output("ExUnitRunAll", content)
+defmodule A do
+  use ExUnit.Case
+  test "truth" 
+    :ok
+  end
+end
+    EOF
+  end # }}}
+
+  it "compilation error(missing end)" do # {{{
+    content = <<~EOF
+|| **CWD**%%DIRNAME%%
+test/fixture_test.exs|8 error| missing terminator: end (for "do" starting at line 1)
+EOF
+
+    expect(<<~EOF).to be_test_output("ExUnitRunAll", content)
+defmodule A do
+  use ExUnit.Case
+  test "truth" do
+    if true do
+      :ok
+  end
+end
+    EOF
+  end # }}}
+
   it "failing assert" do # {{{
     content = <<~EOF
 || **CWD**%%DIRNAME%%
@@ -297,7 +346,7 @@ Randomized with seed 442759
 
   end # }}}
 
-  it "parse crash inside GenServer clause" do
+  it "parse crash inside GenServer clause" do # {{{
     content = <<~EOF
 || **CWD**%%DIRNAME%%
 test/fixture_test.exs|3 error| test truth (A)
@@ -370,8 +419,9 @@ Randomized with seed 816037
     EOF
 
     expect(mix_test_output).to be_matching_error("exunit_run", internal_content)
-  end
+  end # }}}
 
 end
+
 
 # vim: foldmethod=marker

@@ -5,25 +5,45 @@
 "   see all warnings
 "
 " - run ExUnit test and parse output
-"   - compile error
-"   - test failure - assert fail
-"   - test failure - GenServer crash
-"   - test failure - other???
-" - show symbols for failing tests
-" - shortcut to see current test's fail message
-" - run all test suite/current test file/test under cursor
-" - rerun last test
-" - automatically rerun last test on saving any ex/exs file from current
-"   project
+"   x compile errors
+"   - test failure - receive/refute assert fails
+"   x test failure - assert fail
+"   x test failure - GenServer crash
+"   x test failure - other???
+"   - sort tests in output disregarding ExUnits shuffling
+"
+"   instead of using quickfix - use more graphical UI
+" - show symbols for failed tests using signs functionality
+"   - shortcuts to navigate failed tests list (yes, load back to qf window) +
+"     also if there are splits visible - just to correct window, if possible;
+"     do not switch buffer
+" - shortcut to see current test's full fail message in preview window 
+"       :help special-buffers
+"
+" - command to rerun last test
+" - shortcuts for running tests + rerun (in Vim-Elixir-IDE)
+" - run all test files from current directory
+" - fix absolute paths being visible in :copen, use short ones
+" x run all test suite/current test file/test under cursor
 "
 "   only in Vim8.0 with jobs support
 "
-" - allow recompile on each ex/exs save
+" - start/reconnect to xterm for full output copy
+" - load failed tests list from job/channel + show signs
+" - kill jobs properly when changing target
+" - allow async automatic recompile on each ex/exs save + show syntax
+"   errors/warnings (like syntastic)
+" - automatically rerun last test on saving any ex/exs file from current
+"   project (send \n to watched process)
+" 
 " - notify in airline that there are compile errors
 " - use async jobs for on-save compile/test runs (only Vim 8.x)
 "   allow killing tests as soon as first error is received/parsed (run with
 "   -seed 0 to have consistent sequence)
 "
+" replace cc/cn & etc with out replacements
+" http://vim.wikia.com/wiki/Replace_a_builtin_command_using_cabbrev
+" http://stackoverflow.com/questions/2605036/vim-redefine-a-command
 
 
 "let s:cpo_save = &cpo
@@ -89,6 +109,7 @@ let s:ERROR_FORMATS = {
                 \  '%-GExcluding\ tags:%.%#,'.
                 \  '%-GFinished\ in\ %.%#,'.
                 \  '%-G\ \ \ \ \ stacktrace:,'.
+                \     '**\ (%[A-Z]%\\w%\\+%trror)\ %f:%l:\ %m,'.
                 \  '%+G\ \ \ \ \ %\\w%\\+:\ ,'.
                 \   '%E\ \ %\\d%\\+)\ %m,' .
                 \   '%Z\ \ \ \ \ %f:%l,'.
@@ -307,6 +328,17 @@ function! s:exUnitOutputPostprocess(options, lines)
                 let a:lines[j] = "SKIP"
                 let j += 1
             endwhile
+        elseif ln =~ '\C^[*][*] ([A-Z]\w\+Error) '
+                let j = i+1
+                " go forward and clean all consequetive ' (stdlib) file:line'
+                " or similar messages
+                while j<len(a:lines) && a:lines[j] !~ '^\s*$'
+                    if a:lines[j] =~ '^    \+(\w\+) \S\+:\d\+:'
+                        let a:lines[j] = "SKIP"
+                    endif
+                    let j += 1
+                endwhile
+
         elseif ln =~ '^\C        \+\S\+:\d\+: [A-Z]\w*\.\w\+'
             if prevLn =~ '^         [*][*]'
                 let a:lines[i] = "E" . ln . substitute(prevLn, ' \+', ' ', 'g')
