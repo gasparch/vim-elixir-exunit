@@ -1,41 +1,55 @@
 
-" add possibility to
+" Vim-Elixir-ExUnit allows tight integration of ExUnit framework with Vim
+" 
+" (items with 'x' are done)
+" TODO: 
 "
-" - add 'force' argument to MixCompile command for full project recompile to
-"   see all warnings
+" - compiler support
+"   x :make runs and shows only compile time errors
+"   - :MixCompile shows errors and warnings
+"       - add 'force' argument to MixCompile command for full project recompile to
+"         see all warnings
+"       - restore warnings capture + tests
+"       - add shortcuts to compile call
 "
-" - run ExUnit test and parse output
+" - run ExUnit test and parse output (write rspec tests)
 "   x compile errors
 "   - test failure - receive/refute assert fails
 "   x test failure - assert fail
 "   x test failure - GenServer crash
 "   x test failure - other???
-"   - sort tests in output disregarding ExUnits shuffling
+"   x run tests from top to down (run mix test --seed 0)
+"   - make possible to run ExUnit tests shuffled??? (or let user run from
+"     commandline if it is really the case) (may be make configurable)
+" x command to rerun last test
+" x shortcuts for running tests - all,file,line,rerun  (<Leader>xa, xf, xl, xx)
+" - move shortcuts to Vim-Elixir-IDE
+" x run all test suite/current test file/test under cursor
 "
+" LOW: priority
+" - run all test files from current directory
+" - fix absolute paths being visible in :copen, use short ones
+"   (reproduce&write spec)
+"
+" LOW: priority for Vim 7.4 mode
 "   instead of using quickfix - use more graphical UI
 " - show symbols for failed tests using signs functionality
 "   - shortcuts to navigate failed tests list (yes, load back to qf window) +
 "     also if there are splits visible - just to correct window, if possible;
 "     do not switch buffer
-" - shortcut to see current test's full fail message in preview window 
+" - shortcut to see current test's full fail message in preview window
 "       :help special-buffers
 "
-" - command to rerun last test
-" - shortcuts for running tests + rerun (in Vim-Elixir-IDE)
-" - run all test files from current directory
-" - fix absolute paths being visible in :copen, use short ones
-" x run all test suite/current test file/test under cursor
+" HIGH: only in Vim8.0 with jobs support
 "
-"   only in Vim8.0 with jobs support
-"
-" - start/reconnect to xterm for full output copy
+" - start xterm/reconnect to xterm for full output copy
 " - load failed tests list from job/channel + show signs
 " - kill jobs properly when changing target
 " - allow async automatic recompile on each ex/exs save + show syntax
 "   errors/warnings (like syntastic)
 " - automatically rerun last test on saving any ex/exs file from current
 "   project (send \n to watched process)
-" 
+"
 " - notify in airline that there are compile errors
 " - use async jobs for on-save compile/test runs (only Vim 8.x)
 "   allow killing tests as soon as first error is received/parsed (run with
@@ -44,46 +58,35 @@
 " replace cc/cn & etc with out replacements
 " http://vim.wikia.com/wiki/Replace_a_builtin_command_using_cabbrev
 " http://stackoverflow.com/questions/2605036/vim-redefine-a-command
-
-
-"let s:cpo_save = &cpo
-"set cpo-=C
-"CompilerSet makeprg=mix\ test
-"CompilerSet errorformat=
-"  \%E\ \ %n)\ %m,
-"  \%+G\ \ \ \ \ **\ %m,
-"  \%+G\ \ \ \ \ stacktrace:,
-"  \%C\ \ \ \ \ %f:%l,
-"  \%+G\ \ \ \ \ \ \ (%\\w%\\+)\ %f:%l:\ %m,
-"  \%+G\ \ \ \ \ \ \ %f:%l:\ %.%#,
-"  \**\ (%\\w%\\+)\ %f:%l:\ %m
-
-"let &cpo = s:cpo_save
-"unlet s:cpo_save
-
-
-
-"  1) test truth (A)
-"     test/fixture_test.exs:3
-"     Assertion with == failed
-"     code: 2 == 1
-"     lhs:  2
-"     rhs:  1
-"     stacktrace:
-"       test/fixture_test.exs:4: (test)
-
-
-
-"Finished in 0.05 seconds
-"1 test, 1 failure
-
-"Randomized with seed 669689
-
+"
+" we have 3 modes of running RunCommand/WatchCommand
+"
+" 1) just run command in foreground once, block Vim for that time, then parse
+"    output with errorformat and show errors (worst case, but if user requests
+"    it:)
+"
+" 2) we do not have async support, but we can attach cat to mix test
+" --listen-on-stdout and then write to cat command stdout using
+"  /prod/$PID/fd/1 which will trigger test re-run (NOT IMPLEMENTED right now,
+"  switch to Vim 8)
+"
+" 3) PROPER WAY:
+"   - run xterm with just cat in it, no actual functionality there
+"   - run background Job (mix test --listen-on-stdin) and connect to its
+"   stdin/stdout
+"   - when user saves file - send \n to mix test
+"   - read all output of mix test and
+"     - feed into quickfix with errorformat
+"     - copy to stdin to xterm/cat, so that user will also see the real output
+"
+"   This mode can be also turned to nice, nonblocking mode 1, but much later :)
+"
 
 let s:WATCHING_INACTIVE    = -999
 let s:WATCHING_PID_UNKNOWN = -998
-let s:MAKEPRG_MIX_RUN = 'mix test'
+let s:MAKEPRG_MIX_RUN = 'mix test --seed 0 '
 
+" {{{ ERROR_FORMATS definition
 let s:ERROR_FORMATS = {
             \ "mix_compile":
                 \'%-G%[\ ]%[\ ]%[\ ]%#(%.%#,'.
@@ -115,34 +118,9 @@ let s:ERROR_FORMATS = {
                 \   '%Z\ \ \ \ \ %f:%l,'.
                 \  '%+G\ \ \ \ \ %\\w%\\+,'.
                 \     '%t\ \ \ \ \ \ %f:%l:\ %m,'.
-                \ "",
-            \ "exunit_run_orig":
-                \  '%G\ \ %f:%.%#,'.
-                \  '%-D**CWD**%f,' .
-                \  "%-G**CWD**%f,".
-                \  '%-GGenerated\ %.%#\ app,'.
-                \  '%-A=ERROR REPORT%.%#,'.
-                \  '%-G**\ %\\S%.%#,'.
-                \   '%Z\ %#,'.
-                \ '%E%>\ \ %n)\ %m,' .
-                \   '%C\ \ \ \ \ %f:%l,'.
-                \  '%+C\ \ \ \ \ **\ %m,'.
-                \ '%Z%>\ \ \ \ \ stacktrace:,'.
-                \  '%+G\ \ \ \ \ %#**%.%#,'.
-                \  '%+G\ \ \ \ \ %\\w%m,'.
-                \   '%A\ \ \ \ \ \ %\\+(%\\w%\\+)\ %f:%l:\ %m,'.
-                \   '%E\ \ \ \ \ \ %f:%l:\ %m,'.
-                \'%-G%>warning:%.%#,'.
-                \  '%-G\ \ %f:%.%#,'.
-                \  '%-G\ \ \ \ \ %#%[[{(]%.%#,'.
-                \  '%-G\ \ \ \ \ \ \ \ \ %#%[a-z]%.%#,'.
                 \ ""
             \ }
-
-
-                "\  '%-G\ \ \ \ \ %#%[[{(]%.%#,'.
-
-
+" }}}
 
 function! vimelixirexunit#boot() " {{{
   call vimelixirexunit#setDefaults()
@@ -177,6 +155,7 @@ function vimelixirexunit#setMixCompileCommand() " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
 
     if mixDir != ''
+        " classic :make will parse/show only errors
         let &l:makeprg="cd ".escape(mixDir, " ").";".
                     \ "(echo '**CWD**".escape(mixDir, " ")."';".
                     \ "mix compile)"
@@ -200,7 +179,8 @@ function vimelixirexunit#runMixCompileCommand() " {{{
     let errors = s:runCompiler(compilerDef)
 endfunction " }}}
 
-" support ExUnitRun* commands
+" support ExUnitRun* commands, classic QuickFix workflow
+" blocks Vim while running
 function vimelixirexunit#setExUnitRunCommands() " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
 
@@ -211,40 +191,30 @@ function vimelixirexunit#setExUnitRunCommands() " {{{
         let &l:errorformat = s:ERROR_FORMATS['mix_compile_errors_only']
     endif
 
-    command! -bar ExUnitRunAll call vimelixirexunit#runExUnitRunCommand('all')
-    command! -bar ExUnitRunFile call vimelixirexunit#runExUnitRunCommand('file')
-    command! -bar ExUnitRunLine call vimelixirexunit#runExUnitRunCommand('line')
+    command! -bar ExUnitQfRunAll call vimelixirexunit#runExUnitRunCommand('all')
+    command! -bar ExUnitQfRunFile call vimelixirexunit#runExUnitRunCommand('file')
+    command! -bar ExUnitQfRunLine call vimelixirexunit#runExUnitRunCommand('line')
+    command! -bar ExUnitQfRerun call vimelixirexunit#runExUnitRunCommand('run_again')
 
     command! -bar ExUnitWatchFile call vimelixirexunit#runExUnitWatchCommand('file')
     command! -bar ExUnitWatchLine call vimelixirexunit#runExUnitWatchCommand('line')
+
+    map  <buffer> <Leader>xa :ExUnitQfRunFile<CR>
+    map  <buffer> <Leader>xf :ExUnitQfRunFile<CR>
+    map  <buffer> <Leader>xl :ExUnitQfRunLine<CR>
+    map  <buffer> <Leader>xx :ExUnitQfRerun<CR>
+
+    " jump to next/previous error and center screen
+    nnoremap [e :cprevious<CR>zz
+    nnoremap ]e :cnext<CR>zz
+    " always open
+    cabbrev cw <c-r>=(getcmdtype()==':' && getcmdpos()==1 ? 'botright cwindow' : 'cw')<CR>
 
     map <silent> <buffer> <Leader>bb :ExUnitWatchLine<CR>
 endfunction " }}}
 
 
-" we have 3 modes of running this command
-"
-" 1) just run command in foreground once, block Vim for that time, then parse
-"    output with errorformat and show errors (worst case, but if user requests
-"    it:)
-"
-" 2) we do not have async support, but we can attach cat to mix test
-" --listen-on-stdout and then write to cat command stdout using
-"  /prod/$PID/fd/1 which will trigger test re-run (NOT IMPLEMENTED right now,
-"  switch to Vim 8)
-"
-" 3) PROPER WAY:
-"   - run xterm with just cat in it, no actual functionality there
-"   - run background Job (mix test --listen-on-stdin) and connect to its
-"   stdin/stdout
-"   - when user saves file - send \n to mix test
-"   - read all output of mix test and
-"     - feed into quickfix with errorformat
-"     - copy to stdin to xterm/cat, so that user will also see the real output
-"
-"   This mode can be also turned to nice, nonblocking mode 1, but much later :)
-"
-function s:getMakeprg(mode, mixDir)
+function s:getMakeprg(mode, mixDir) " {{{
     let mode = a:mode
     let mixCmd = s:MAKEPRG_MIX_RUN
     if mode == 'all'
@@ -262,12 +232,23 @@ function s:getMakeprg(mode, mixDir)
     end
 
     return makeprg
-endfunction
+endfunction " }}}
 
+let s:runExUnitRunCommandCache = ''
 function! vimelixirexunit#runExUnitRunCommand(mode) " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
 
-    let makeprg = s:getMakeprg(a:mode, mixDir)
+    if a:mode == 'run_again'
+        if s:runExUnitRunCommandCache != ''
+            let makeprg = s:runExUnitRunCommandCache
+        else
+            echo "No previous command to run tests"
+            return
+        endif
+    else
+        let makeprg = s:getMakeprg(a:mode, mixDir)
+        let s:runExUnitRunCommandCache = makeprg
+    endif
 
     let compilerDef = {
                 \ 'makeprg': makeprg,
@@ -277,12 +258,31 @@ function! vimelixirexunit#runExUnitRunCommand(mode) " {{{
                 \ 'postprocess': function('s:exUnitOutputPostprocess')
                 \ }
 
+    let errors = s:runCompiler(compilerDef)
 
-    call s:runCompiler(compilerDef)
+    let tests_string = filter(deepcopy(errors), "v:val['text'] =~ '^\\d\\+ tests'")
+    try
+        if len(tests_string) > 0
+            let tests_split = split(tests_string[0]['text'])
+
+            if tests_split[2] > 0
+                echo "Tests FAIL " . (tests_string[0]['text'])
+            else
+                cexpr []
+                cclose
+                echo "Tests PASS"
+            endif
+        else
+            echo "Compile errors (most probably :)"
+        endif
+    catch
+        " do nothing
+        let pass = 1
+    endtry
 endfunction " }}}
 
-
-function! s:exUnitOutputPostprocess(options, lines)
+" convert ExUnit output to something more suited for errorformat parsing
+function! s:exUnitOutputPostprocess(options, lines) " {{{
     if len(a:lines) < 2
         return a:lines
     endif
@@ -368,7 +368,7 @@ function! s:exUnitOutputPostprocess(options, lines)
     endwhile
 
     return a:lines
-endfunction
+endfunction " }}}
 
 function vimelixirexunit#runExUnitWatchCommand(mode) " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
@@ -452,7 +452,7 @@ function vimelixirexunit#runExUnitWatchCommand(mode) " {{{
     endif
 endfunction " }}}
 
-function! vimelixirexunit#processJobOutput(options, msg)
+function! vimelixirexunit#processJobOutput(options, msg) 
     call vimelixirexunit#parseJobOutput(a:options, a:msg)
     call vimelixirexunit#postToXTerm(a:options, a:msg)
 endfunction
