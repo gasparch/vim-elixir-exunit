@@ -582,7 +582,8 @@ endfunction "}}}
 function! s:appendToFile(message, file) "{{{
   silent! new
   silent! setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
-  silent! put!=a:message
+  silent! put=a:message
+  silent! normal ggdd
   silent! execute 'w >>' a:file
   silent! q
 endfunction "}}}
