@@ -33,7 +33,7 @@ describe 'parsing compiler warnings' do
       "{'lnum': 7, 'col': 0, 'valid': 1, 'vcol': 0, 'nr': -1, 'type': 'W', 'text': 'unused alias Levels'}" +
       "]"
 
-    expect(<<~EOF).to be_matching_error("mix_compile", content)
+    expect(<<~EOF).to be_matching_error("mix_compile", content, 'vr')
 Compiling 7 files (.ex)
 warning: variable level is unused
   lib/foo/bar/baz.ex:94

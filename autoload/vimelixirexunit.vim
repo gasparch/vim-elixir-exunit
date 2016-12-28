@@ -1,16 +1,18 @@
 
 " Vim-Elixir-ExUnit allows tight integration of ExUnit framework with Vim
-" 
+"
 " (items with 'x' are done)
-" TODO: 
+" TODO:
 "
 " - compiler support
 "   x :make runs and shows only compile time errors
 "   - :MixCompile shows errors and warnings
-"       - add 'force' argument to MixCompile command for full project recompile to
+"       x add 'force' argument to MixCompile command for full project recompile to
 "         see all warnings
-"       - restore warnings capture + tests
-"       - add shortcuts to compile call
+"       x restore warnings capture + tests
+"       x add shortcuts to calls: compile, compile all (\xc, \x!)
+"       - fix absolute paths being visible in :copen, use short ones
+"         (reproduce&write spec)
 "
 " - run ExUnit test and parse output (write rspec tests)
 "   x compile errors
@@ -25,11 +27,30 @@
 " x shortcuts for running tests - all,file,line,rerun  (<Leader>xa, xf, xl, xx)
 " - move shortcuts to Vim-Elixir-IDE
 " x run all test suite/current test file/test under cursor
+" x convert error/warning navigation shortcuts to function calls and try to
+"   make sense of warning/error message and navigate to correct column in the
+"   line ([e/]e work like that, :cnext, cprev left unchanged)
+"   x support 2 errors/warnings on same line
+"   - support more than 2 errors/warnings on same line
+"
+" HIGH: only in Vim8.0 with jobs support
+"
+" x start xterm/reconnect to xterm for full output copy
+" x use async jobs for on-save compile/test runs (only Vim 8.x)
+" x load failed tests list from job/channel into QuickFix
+" - show signs for failed jobs
+"   - load failed tests list from job/channel into internal list/no QuickFix
+" x kill jobs properly when changing target
+" x automatically rerun last test on saving any ex/exs file from current
+"   project (send \n to watched process)
+"
+" - show syntax errors/warnings on auto-save and recompile (like syntastic)
+" - notify in airline that there are compile errors
+" - allow killing tests as soon as first error is received/parsed (run with
+"   -seed 0 to have consistent sequence)
 "
 " LOW: priority
 " - run all test files from current directory
-" - fix absolute paths being visible in :copen, use short ones
-"   (reproduce&write spec)
 "
 " LOW: priority for Vim 7.4 mode
 "   instead of using quickfix - use more graphical UI
@@ -40,24 +61,6 @@
 " - shortcut to see current test's full fail message in preview window
 "       :help special-buffers
 "
-" HIGH: only in Vim8.0 with jobs support
-"
-" - start xterm/reconnect to xterm for full output copy
-" - load failed tests list from job/channel + show signs
-" - kill jobs properly when changing target
-" - allow async automatic recompile on each ex/exs save + show syntax
-"   errors/warnings (like syntastic)
-" - automatically rerun last test on saving any ex/exs file from current
-"   project (send \n to watched process)
-"
-" - notify in airline that there are compile errors
-" - use async jobs for on-save compile/test runs (only Vim 8.x)
-"   allow killing tests as soon as first error is received/parsed (run with
-"   -seed 0 to have consistent sequence)
-"
-" replace cc/cn & etc with out replacements
-" http://vim.wikia.com/wiki/Replace_a_builtin_command_using_cabbrev
-" http://stackoverflow.com/questions/2605036/vim-redefine-a-command
 "
 " we have 3 modes of running RunCommand/WatchCommand
 "
@@ -82,13 +85,50 @@
 "   This mode can be also turned to nice, nonblocking mode 1, but much later :)
 "
 
-let s:WATCHING_INACTIVE    = -999
-let s:WATCHING_PID_UNKNOWN = -998
-let s:MAKEPRG_MIX_RUN = 'mix test --seed 0 '
+let s:BOOT_FINISHED = 0
 
-" {{{ ERROR_FORMATS definition
-let s:ERROR_FORMATS = {
-            \ "mix_compile":
+function! vimelixirexunit#boot() " {{{
+  call vimelixirexunit#setDefaults()
+
+  if !s:BOOT_FINISHED
+      call vimelixirexunit#bootGlobal()
+      let s:BOOT_FINISHED = 1
+  endif
+
+  " this happens in each buffer
+  if g:vim_elixir_mix_compile != ''  | call vimelixirexunit#setMixCompileCommand() | endif
+  if g:vim_elixir_exunit_tests != '' | call vimelixirexunit#setExUnitRunCommands() | endif
+endfunction " }}}
+
+function! vimelixirexunit#setDefaults() "{{{
+  if !exists('g:vim_elixir_exunit_shell')
+      let g:vim_elixir_exunit_shell = &shell
+  endif
+
+  call s:setGlobal('g:vim_elixir_mix_compile', 1)
+  call s:setGlobal('g:vim_elixir_exunit_tests', 1)
+
+  " do not want to mess with windows async yet
+  call s:setGlobal('g:vim_elixir_exunit_async', (v:version >= 800 && !(has("win32") || has("win16"))))
+
+  call s:setGlobal('g:vim_elixir_exunit_rerun_on_save', 1)
+
+  "call s:setGlobal('g:vim_elixir_exunit_symbols', 1)
+
+endfunction "}}}
+
+function! vimelixirexunit#bootGlobal() " {{{
+  let s:WATCHING_INACTIVE    = -999
+  let s:WATCHING_PID_UNKNOWN = -998
+  let s:MAKEPRG_MIX_RUN = 'mix test --seed 0 '
+
+  let s:XTERM_CAT_PID = s:WATCHING_INACTIVE
+  let s:INPUT_CAT_PID = s:WATCHING_INACTIVE
+  let s:MIX_TEST_JOB  = s:WATCHING_INACTIVE
+
+  " {{{ ERROR_FORMATS definition
+  let s:ERROR_FORMATS = {
+              \ "mix_compile":
                 \'%-G%[\ ]%[\ ]%[\ ]%#(%.%#,'.
                 \'%E**\ (%[A-Z]%[%^)]%#)\ %f:%l:\ %m,'.
                 \'%Z%^%[\ ]%#%$,'.
@@ -96,14 +136,14 @@ let s:ERROR_FORMATS = {
                 \'%-C\ \ %f:%l,'.
                 \'%-G==\ Compilation error%.%#,'.
                 \'%-G%[\ ]%#',
-            \ "mix_compile_errors_only":
+              \ "mix_compile_errors_only":
                 \ "%-D**CWD**%f,".
                 \'%-G==\ Compilation error%.%#,'.
                 \'%-Gwarning:%.%#,'.
                 \'%-G%[\ ]%#,'.
                 \'%-G\ %.%#,'.
                 \'%E**\ (%[%^)]%#)\ %f:%l:\ %m',
-            \ "exunit_run":
+              \ "exunit_run":
                 \   '%D**CWD**%f,' .
                 \  '%-G%\\s%#,'.
                 \  '%-GSKIP,'.
@@ -119,36 +159,9 @@ let s:ERROR_FORMATS = {
                 \  '%+G\ \ \ \ \ %\\w%\\+,'.
                 \     '%t\ \ \ \ \ \ %f:%l:\ %m,'.
                 \ ""
-            \ }
-" }}}
-
-function! vimelixirexunit#boot() " {{{
-  call vimelixirexunit#setDefaults()
-
-  if g:vim_elixir_mix_compile != ''  | call vimelixirexunit#setMixCompileCommand() | endif
-  if g:vim_elixir_exunit_tests != '' | call vimelixirexunit#setExUnitRunCommands() | endif
-
-  let s:XTERM_CAT_PID = s:WATCHING_INACTIVE
-  let s:INPUT_CAT_PID = s:WATCHING_INACTIVE
-  let s:MIX_TEST_JOB  = s:WATCHING_INACTIVE
-
+              \ }
+  " }}}
 endfunction " }}}
-
-function! vimelixirexunit#setDefaults() "{{{
-  if !exists('g:vim_elixir_exunit_shell')
-      let g:vim_elixir_exunit_shell = &shell
-  endif
-
-  call s:setGlobal('g:vim_elixir_mix_compile', 1)
-  call s:setGlobal('g:vim_elixir_exunit_tests', 1)
-
-  " do not want to mess with windows async yet
-  call s:setGlobal('g:vim_elixir_exunit_async', (v:version >= 800 && !(has("win32") || has("win16"))))
-
-  "call s:setGlobal('g:vim_elixir_exunit_rerun_on_save', 1)
-  "call s:setGlobal('g:vim_elixir_exunit_symbols', 1)
-
-endfunction "}}}
 
 " support MixCompile
 function vimelixirexunit#setMixCompileCommand() " {{{
@@ -162,18 +175,26 @@ function vimelixirexunit#setMixCompileCommand() " {{{
         let &l:errorformat = s:ERROR_FORMATS['mix_compile_errors_only']
     endif
 
-    command! -bar MixCompile call vimelixirexunit#runMixCompileCommand()
-    map <silent> <buffer> <Leader>aa :MixCompile<CR>
+    command! -bang -buffer MixCompile call vimelixirexunit#runMixCompileCommand('<bang>')
+    command! -buffer MixCompileAll call vimelixirexunit#runMixCompileCommand('!')
+
+    map <buffer> <Leader>xc :MixCompile<CR>
+    map <buffer> <Leader>x! :MixCompile!<CR>
 endfunction " }}}
 
-function vimelixirexunit#runMixCompileCommand() " {{{
+function! vimelixirexunit#runMixCompileCommand(arg) " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
 
+    let makeprg = 'mix compile'
+    if a:arg == '!'
+        let makeprg .= ' --force'
+    endif
+
     let compilerDef = {
-        \ "makeprg": "mix compile",
-        \ "target": "qfkeep",
-        \ "cwd": mixDir,
-        \ "errorformat": s:ERROR_FORMATS['mix_compile']
+        \ 'makeprg': makeprg,
+        \ 'target': 'qfkeep',
+        \ 'cwd': mixDir,
+        \ 'errorformat': s:ERROR_FORMATS['mix_compile']
         \ }
 
     let errors = s:runCompiler(compilerDef)
@@ -191,44 +212,58 @@ function vimelixirexunit#setExUnitRunCommands() " {{{
         let &l:errorformat = s:ERROR_FORMATS['mix_compile_errors_only']
     endif
 
-    command! -bar ExUnitQfRunAll call vimelixirexunit#runExUnitRunCommand('all')
-    command! -bar ExUnitQfRunFile call vimelixirexunit#runExUnitRunCommand('file')
-    command! -bar ExUnitQfRunLine call vimelixirexunit#runExUnitRunCommand('line')
-    command! -bar ExUnitQfRerun call vimelixirexunit#runExUnitRunCommand('run_again')
+    command! -bar ExUnitQfRunAll   call vimelixirexunit#runExUnitRunCommand('all')
+    command! -bar ExUnitQfRunFile  call vimelixirexunit#runExUnitRunCommand('file')
+    command! -bar ExUnitQfRunLine  call vimelixirexunit#runExUnitRunCommand('line')
+    command! -bar ExUnitQfRerun    call vimelixirexunit#runExUnitRunCommand('run_again')
 
-    command! -bar ExUnitWatchFile call vimelixirexunit#runExUnitWatchCommand('file')
-    command! -bar ExUnitWatchLine call vimelixirexunit#runExUnitWatchCommand('line')
+    command! -bar ExUnitWatchAll   call vimelixirexunit#runExUnitWatchCommand('all')
+    command! -bar ExUnitWatchFile  call vimelixirexunit#runExUnitWatchCommand('file')
+    command! -bar ExUnitWatchLine  call vimelixirexunit#runExUnitWatchCommand('line')
+    command! -bar ExUnitWatchRerun call vimelixirexunit#runExUnitWatchCommand('run_again')
+    command! -bar ExUnitWatchStop  call vimelixirexunit#runExUnitWatchCommand('stop')
 
-    map  <buffer> <Leader>xa :ExUnitQfRunFile<CR>
-    map  <buffer> <Leader>xf :ExUnitQfRunFile<CR>
-    map  <buffer> <Leader>xl :ExUnitQfRunLine<CR>
-    map  <buffer> <Leader>xx :ExUnitQfRerun<CR>
+    map <buffer> <Leader>xa :ExUnitQfRunFile<CR>
+    map <buffer> <Leader>xf :ExUnitQfRunFile<CR>
+    map <buffer> <Leader>xl :ExUnitQfRunLine<CR>
+    " consider binding this in all buffers, not only in Elixir ones, for
+    " easier access
+    map <buffer> <Leader>xx :ExUnitQfRerun<CR>
+
+    map <buffer> <Leader>wa :ExUnitWatchAll<CR>
+    map <buffer> <Leader>wf :ExUnitWatchFile<CR>
+    map <buffer> <Leader>wl :ExUnitWatchLine<CR>
+    map <buffer> <Leader>ww :ExUnitWatchRerun<CR>
+    " both Stop and Cancel mnomonics mapped to stop
+    map <buffer> <Leader>ws :ExUnitWatchStop<CR>
+    map <buffer> <Leader>wc :ExUnitWatchStop<CR>
+
+    command! ExUnitNextError call s:navigateQuickFix('next')
+    command! ExUnitPrevError call s:navigateQuickFix('prev')
 
     " jump to next/previous error and center screen
-    nnoremap [e :cprevious<CR>zz
-    nnoremap ]e :cnext<CR>zz
-    " always open
+    " TODO: convert to functions for navigation to correct column
+    nnoremap [e :ExUnitPrevError<CR>
+    nnoremap ]e :ExUnitNextError<CR>
+    " always open at bottom of screen, even if splits exist
+    " we need full width to show long messages nicely
     cabbrev cw <c-r>=(getcmdtype()==':' && getcmdpos()==1 ? 'botright cwindow' : 'cw')<CR>
 
-    map <silent> <buffer> <Leader>bb :ExUnitWatchLine<CR>
 endfunction " }}}
 
-
-function s:getMakeprg(mode, mixDir) " {{{
-    let mode = a:mode
-    let mixCmd = s:MAKEPRG_MIX_RUN
-    if mode == 'all'
-        let makeprg = mixCmd
-    elseif mode == 'file'
+function s:getMakeprg(mode, mixDir, mixCmd) " {{{
+    if a:mode == 'all'
+        let makeprg = a:mixCmd
+    elseif a:mode == 'file'
         let fileName = expand('%:p')
         let fileName = substitute(fileName, a:mixDir . '/', '', '')
 
-        let makeprg = mixCmd . ' ' . escape(fileName, ' ')
-    elseif mode == 'line'
+        let makeprg = a:mixCmd . ' ' . escape(fileName, ' ')
+    elseif a:mode == 'line'
         let fileName = expand('%:p')
         let fileName = substitute(fileName, a:mixDir . '/', '', '')
 
-        let makeprg = mixCmd . ' ' . escape(fileName, ' ') . ':' . line('.')
+        let makeprg = a:mixCmd . ' ' . escape(fileName, ' ') . ':' . line('.')
     end
 
     return makeprg
@@ -242,11 +277,11 @@ function! vimelixirexunit#runExUnitRunCommand(mode) " {{{
         if s:runExUnitRunCommandCache != ''
             let makeprg = s:runExUnitRunCommandCache
         else
-            echo "No previous command to run tests"
+            call s:echoDull("No previous command to run tests.")
             return
         endif
     else
-        let makeprg = s:getMakeprg(a:mode, mixDir)
+        let makeprg = s:getMakeprg(a:mode, mixDir, s:MAKEPRG_MIX_RUN)
         let s:runExUnitRunCommandCache = makeprg
     endif
 
@@ -259,21 +294,31 @@ function! vimelixirexunit#runExUnitRunCommand(mode) " {{{
                 \ }
 
     let errors = s:runCompiler(compilerDef)
+    call s:echoPassFailMessages(errors)
+endfunction " }}}
 
-    let tests_string = filter(deepcopy(errors), "v:val['text'] =~ '^\\d\\+ tests'")
+function! s:echoPassFailMessages(errors, ...) " {{{
+    let supress_compile_status = 0
+    if a:0 == 1
+        let supress_compile_status = a:1
+    endif
+
+    let tests_string = filter(deepcopy(a:errors), "v:val['text'] =~ '^\\d\\+ tests'")
     try
         if len(tests_string) > 0
             let tests_split = split(tests_string[0]['text'])
 
             if tests_split[2] > 0
-                echo "Tests FAIL " . (tests_string[0]['text'])
+                call s:echoWarning("Tests FAIL " . (tests_string[0]['text']))
             else
                 cexpr []
                 cclose
-                echo "Tests PASS"
+                call s:echoInfoText("Tests PASS")
             endif
         else
-            echo "Compile errors (most probably :)"
+            if !supress_compile_status
+                call s:echoWarning("Compile errors (most probably, didn't parsed them carefully :).")
+            endif
         endif
     catch
         " do nothing
@@ -370,27 +415,69 @@ function! s:exUnitOutputPostprocess(options, lines) " {{{
     return a:lines
 endfunction " }}}
 
+let s:runExUnitWatchCommandCache = ''
+let s:runExUnitWatchProjectDir = ''
 function vimelixirexunit#runExUnitWatchCommand(mode) " {{{
-    let mixDir = vimelixirexunit#findMixDirectory()
-
-    let run_compiler = 1
-    let run_in_terminal = 0
-    let mixCmd = 'mix test'
-    if len(matches) == 1
-        let mode = matches[0]
-    else
-        let mode = matches[1]
-        let run_in_terminal = 1
-        let mixCmd = 'mix test --color --listen-on-stdin'
+    if !g:vim_elixir_exunit_async
+        call s:echoDull("Async mode in not enabled or not supported (requires Vim8), sorry :( .")
+        retur
     endif
 
-    let makeprg = s:getMakeprg(a:mode)
+    if a:mode == 'stop'
+        let is_running = type(s:MIX_TEST_JOB) == 8 && job_status(s:MIX_TEST_JOB) == 'run'
+        if is_running
+            call s:stopJob(s:MIX_TEST_JOB)
+            let s:MIX_TEST_JOB = s:WATCHING_INACTIVE
+            call s:echoNormal("Watch job stopped.")
+        else
+            call s:echoNormal("No watch job to stop.")
+        endif
+        call s:changeXTermTitle(s:generateXTermTitle(a:mode, ''))
+        call s:clearExUnitWatchCommandCache()
+        return
+    endif
 
+    let mixDir = vimelixirexunit#findMixDirectory()
+    let mixCmd = s:MAKEPRG_MIX_RUN . ' --color --listen-on-stdin'
 
-    let terminal_cmd = makeprg
-    let target = 'qfkeep'
+    let is_xterm_started = vimelixirexunit#findXTerm()
+    if !is_xterm_started
+        " we will later find `cat`'s pid and stdio by this string
+        let terminal_cmd = 'cat - all_cats_are_gray_in_vim_exunit'
+        let title = shellescape(s:generateXTermTitle(a:mode, mixDir))
 
-    if g:vim_elixir_exunit_async && matches[0] == 'watch'
+        let xterm_prg = s:wrapIntoTerminalInvocation(terminal_cmd, title)
+
+        let xtermDef = {
+            \ 'makeprg': xterm_prg,
+            \ 'target': 'ignore',
+            \ 'errorformat': ''
+            \ }
+
+        call s:runCompiler(xtermDef)
+    endif
+
+    if a:mode == 'run_again'
+        if s:runExUnitWatchCommandCache != ''
+            let makeprg = s:runExUnitWatchCommandCache
+        else
+            call s:echoDull("No previous command to run tests.")
+            return
+        endif
+    else
+        let makeprg = s:getMakeprg(a:mode, mixDir, mixCmd)
+    endif
+
+    let is_running = type(s:MIX_TEST_JOB) == 8 && job_status(s:MIX_TEST_JOB) == 'run'
+    if !is_running
+        call s:clearExUnitWatchCommandCache()
+    endif
+
+    if makeprg == s:runExUnitWatchCommandCache
+        " send \n to channel(mix test --listen-on-stdin input) to rerun task
+        call vimelixirexunit#parseJobOutput('reset', 0)
+        call s:sendToJob(s:MIX_TEST_JOB, "\n")
+    else
         " run make test in background, control it with sending \n when we
         " want to re-run test, attacht to output
         "
@@ -398,83 +485,77 @@ function vimelixirexunit#runExUnitWatchCommand(mode) " {{{
 
         let mix_test_options = {
                     \ 'makeprg': makeprg,
-                    \ 'target': target,
                     \ 'cwd': mixDir,
                     \ 'out_cb': function('vimelixirexunit#processJobOutput'),
+                    \ 'postprocess': function('s:exUnitOutputPostprocess'),
                     \ 'errorformat': s:ERROR_FORMATS['exunit_run']
                     \ }
 
-        call s:stopJob(s:MIX_TEST_JOB)
-        call vimelixirexunit#parseJobOutput('reset', 0)
-
-        let s:MIX_TEST_JOB = s:runJob(mix_test_options)
-
-        let xterm_started = vimelixirexunit#findXTerm()
-
-        if xterm_started
-            " prevent double run on xterm with output
-            let run_compiler = 0
+        if is_running
+            call s:stopJob(s:MIX_TEST_JOB)
+            let s:MIX_TEST_JOB = s:WATCHING_INACTIVE
         endif
+        call vimelixirexunit#parseJobOutput('reset', 0)
+        let s:MIX_TEST_JOB = s:runJob(mix_test_options)
+        let s:runExUnitWatchCommandCache = makeprg
+        let s:runExUnitWatchProjectDir = mixDir
 
-        " we will later find `cat`'s pid and stdio by this string
-        let terminal_cmd = 'cat - all_cats_are_gray_in_vim_exunit'
-    else
-        " just run mix test.watch inside terminal and we have no control
-        " over it
-        " TODO: actually we may try to use mkfifo to send \n to make it run
-        " again, but screw it for now :)
-
-        "let terminal_cmd = 'cat - input_cat_is_black | ' . terminal_cmd
-        " tell laters script that we started with cat, but just do not know
-        " PID yet
-        "let s:INPUT_CAT_PID = s:WATCHING_PID_UNKNOWN
-    endif
-
-    if run_in_terminal
-        let title = shellescape('ExUnit ' . expand('%:f'))
-        let args  = g:vimide_terminal_run_args
-        let args  = substitute(args, '%CMD%', shellescape(terminal_cmd), '')
-        let args  = substitute(args, '%TITLE%', title, '')
-        let target = 'ignore'
-
-        let makeprg = g:vimide_terminal . ' ' . args . '&'
-    endif
-
-    if run_compiler
-        let compilerDef = {
-            \ 'makeprg': makeprg,
-            \ 'target': target,
-            \ 'cwd': mixDir,
-            \ 'errorformat': s:ERROR_FORMATS['exunit_run']
-            \ }
-
-        let errors = s:runCompiler(compilerDef)
+        " TODO: find what ESC sequence should be sent to XTerm to change title
+        " to new file/mode
+        "
+        call s:changeXTermTitle(s:generateXTermTitle(a:mode, mixDir))
     endif
 endfunction " }}}
 
-function! vimelixirexunit#processJobOutput(options, msg) 
-    call vimelixirexunit#parseJobOutput(a:options, a:msg)
-    call vimelixirexunit#postToXTerm(a:options, a:msg)
-endfunction
+function! vimelixirexunit#runExUnitWatchAutoRun() " {{{
+    " we have to run it on all file types save ;((((
+    if &ft !~ 'elixir' | return | en
+    if !g:vim_elixir_exunit_rerun_on_save | return | en
+    if !g:vim_elixir_exunit_async | return | en
 
-function! vimelixirexunit#parseJobOutput(options, msg)
+    let mixDir = vimelixirexunit#findMixDirectory()
+
+    " if there is cached command and we are in same project directory as
+    " original test file
+    if s:runExUnitWatchCommandCache != '' && mixDir == s:runExUnitWatchProjectDir
+        call vimelixirexunit#runExUnitWatchCommand('run_again')
+    endif
+endfunction " }}}
+
+function! vimelixirexunit#processJobOutput(options, msg) "{{{
+    " copy messages from mix test to terminal and also to feed to sign
+    " generator
+    call vimelixirexunit#postToXTerm(a:options, a:msg)
+    call vimelixirexunit#parseJobOutput(a:options, a:msg)
+endfunction "}}}
+
+function! vimelixirexunit#parseJobOutput(options, msg) "{{{
     if type(a:options) == 1 && a:options == 'reset'
         cexpr []
     else
+        " messages come in batches, so add them to QF buffer, not override
         let options = deepcopy(a:options)
         let options['target'] = 'qfadd'
-        call s:parseErrorLines(options, a:msg)
-    endif
-endfunction
 
-function! vimelixirexunit#postToXTerm(options, msg)
+        let msg = substitute(a:msg, '\[[0-9a-z]\{-1,}m', '', 'g')
+
+        " there is change that postprocess will be confused in messages come
+        " in chunks :((( because of forward and backtracing it does
+        let errors = s:parseErrorLines(options, msg)
+        call s:echoPassFailMessages(errors, 1)
+    endif
+endfunction "}}}
+
+function! vimelixirexunit#postToXTerm(options, msg) "{{{
     if vimelixirexunit#findXTerm()
-        let xtermStdin = "/proc/" . s:XTERM_CAT_PID . "/fd/1"
+        " hacking into Linux /proc filesystem
+        " will need similar hacks to another OSes
+        let xtermStdin = s:pidToIOFileName(s:XTERM_CAT_PID)
         call s:appendToFile(a:msg, xtermStdin)
     endif
-endfunction
+endfunction "}}}
 
-function! vimelixirexunit#findXTerm()
+function! vimelixirexunit#findXTerm() " {{{
     if s:XTERM_CAT_PID < 0
         let xterm_text = s:system("ps ax | grep '[0-9] cat - all_cats_are_gray_in_vim_exunit'")
         let xterm_msg = split(xterm_text, " ")
@@ -482,18 +563,65 @@ function! vimelixirexunit#findXTerm()
         if len(xterm_msg) > 2
             let s:XTERM_CAT_PID = xterm_msg[0]
         endif
+    else
+        " check if we still can write to xterm std(in/out)
+        " if no - report it, so that it will be restarted
+        let fName = s:pidToIOFileName(s:XTERM_CAT_PID)
+        if !filewritable(fName)
+            let s:XTERM_CAT_PID = -1
+        endif
     endif
 
     return s:XTERM_CAT_PID > 0
-endfunction
+endfunction " }}}
 
-function! s:appendToFile(message, file)
-  new
-  setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
-  put=a:message
-  execute 'w >>' a:file
-  q
-endfun
+function! s:pidToIOFileName(pid) "{{{
+    return "/proc/" . a:pid . "/fd/1"
+endfunction "}}}
+
+function! s:appendToFile(message, file) "{{{
+  silent! new
+  silent! setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
+  silent! put!=a:message
+  silent! execute 'w >>' a:file
+  silent! q
+endfunction "}}}
+
+function! s:changeXTermTitle(title) " {{{
+    let args  = g:vimide_terminal_title_change
+    let args  = substitute(args, '%TITLE%', a:title, '')
+    call vimelixirexunit#postToXTerm({}, args)
+endfunction " }}}
+
+function! s:generateXTermTitle(mode, mixDir) " {{{
+    " TODO: may be extract and create common part with s:getMakeprg
+    let msg = 'ExUnit '
+    let fName = expand("%:f")
+    if a:mode == 'all'
+        let msg .= ' all test '
+    elseif a:mode == 'file'
+        let msg .= ' ' . fName
+    elseif a:mode == 'line'
+        let msg .= ' ' . fName .':'. line('.')
+    elseif a:mode == 'stop'
+        let msg .= ' INACTIVE'
+    end
+
+    return msg
+endfunction " }}}
+
+function! s:wrapIntoTerminalInvocation(cmd, title) " {{{
+    let args  = g:vimide_terminal_run_args
+    let args  = substitute(args, '%CMD%', shellescape(a:cmd), '')
+    let args  = substitute(args, '%TITLE%', a:title, '')
+    let makeprg = g:vimide_terminal . ' ' . args . '&'
+    return makeprg
+endfunction " }}}
+
+function! s:clearExUnitWatchCommandCache() "{{{
+    let s:runExUnitWatchCommandCache = ''
+    let s:runExUnitWatchProjectDir = ''
+endfunction "}}}
 
 function! vimelixirexunit#findMixDirectory() "{{{
     let fName = expand("%:p:h")
@@ -514,6 +642,11 @@ function! vimelixirexunit#findMixDirectory() "{{{
 endfunction "}}}
 
 function! s:parseErrorLines(options, content) " {{{
+    " shortcut ignore case
+    if a:options['target'] == 'ignore'
+        return []
+    endif
+
     let old_local_errorformat = &l:errorformat
     let old_errorformat = &errorformat
 
@@ -552,9 +685,6 @@ function! s:parseErrorLines(options, content) " {{{
     elseif a:options['target'] =~ '^qf'
         cgetexpr err_lines
         let errors = deepcopy(getqflist())
-    elseif a:options['target'] == 'ignore'
-        " do nothing
-        let errors = []
     endif
 
     if has_key(a:options, 'leave_valid')
@@ -567,8 +697,7 @@ function! s:parseErrorLines(options, content) " {{{
     return errors
 endfunction " }}}
 
-
-function! s:runJob(options)
+function! s:runJob(options) "{{{
     " save options and locale env variables
     let old_cwd = getcwd()
 
@@ -589,36 +718,44 @@ function! s:runJob(options)
                 \ 'in_mode'    : 'raw',
                 \ 'out_mode'   : 'raw',
                 \ 'stoponexit' : 'term',
-                \ 'out_cb' : {ch, msg -> s:runJobCallback(options, ch, msg)}
+                \ 'out_cb' : {ch, msg -> s:runJobCallback(options, ch, msg)},
+                \ 'err_cb' : {ch, msg -> s:runJobCallback(options, ch, msg)},
                 \ })
+
+                " \ 'close_cb' : {ch -> echo("channel close ". ch)}
 
     if has_key(options, 'cwd')
         execute 'lcd ' . fnameescape(old_cwd)
     endif
 
     return job_id
-endfunction
+endfunction "}}}
 
-function! s:stopJob(job_id)
-    " 9 is job type
-    if type(a:job_id) == 9
-        job_stop(a:job_id, "int")
-        job_stop(a:job_id, "int")
+function! s:stopJob(job_id) "{{{
+    " 8 is job type
+    if type(a:job_id) == 8
+        call job_stop(a:job_id, "term")
+        "call job_stop(a:job_id, "int")
     endif
-endfunction
+endfunction "}}}
 
-function! s:stopJobOnExit()
+function! s:stopJobOnExit() "{{{
     " correctly cleanup 'mix test' job
     " it requires two SIGINT to clean child processes and does not like
     " SIGTERM
     call s:stopJob(s:MIX_TEST_JOB)
-endfunction
+endfunction "}}}
 
-function! s:runJobCallback(options, ch, msg)
+function! s:runJobCallback(options, ch, msg) "{{{
     if has_key(a:options, 'out_cb')
         call a:options['out_cb'](a:options, a:msg)
     endif
-endfunction
+endfunction "}}}
+
+function! s:sendToJob(job_id, msg) "{{{
+    let ch = job_getchannel(a:job_id)
+    call ch_sendraw(ch, a:msg)
+endfunction "}}}
 
 function! s:runCompiler(options) " {{{
     " save options and locale env variables
@@ -640,6 +777,7 @@ function! s:runCompiler(options) " {{{
         execute 'lcd ' . fnameescape(old_cwd)
     endif
 
+    " only for tests
     let s:dump_error_content=error_content
 
     let errors = s:parseErrorLines(options, error_content)
@@ -649,7 +787,7 @@ function! s:runCompiler(options) " {{{
     return errors
 endfunction " }}}
 
-function s:revertQFLocationWindow(options)
+function s:revertQFLocationWindow(options) "{{{
     if a:options['target'] == 'llist'
         try
             silent lolder
@@ -673,8 +811,102 @@ function s:revertQFLocationWindow(options)
     elseif a:options['target'] == 'qfkeep' || a:options['target'] == 'ignore'
         " no nothing
     endif
-endfunction
+endfunction "}}}
 
+let s:navigateQuickFixCachedLine=-1
+function! s:navigateQuickFix(direction) "{{{
+    try 
+        if a:direction == 'next'
+            cnext
+        elseif a:direction == 'prev'
+            cprevious
+        else
+            return
+        endif
+    catch
+        try
+            cc
+        catch
+            call s:echoWarning("No errors available, please write more code with errors.")
+        endtry
+        "return
+    endtry
+
+    if foldlevel('.') > 0 && foldclosed('.') >= 0
+        . foldopen
+    endif
+
+    normal zz
+
+    let currentBuffer = bufnr('%')
+    let line = line('.')
+
+    let thisLineMsg = filter(getqflist(), "v:val['valid'] == 1 && v:val['lnum'] == " . line . " && v:val['bufnr'] == " . currentBuffer)
+
+    if len(thisLineMsg) == 0 | return | en
+
+    let msgIndex = 0
+
+    if line == s:navigateQuickFixCachedLine && len(thisLineMsg) > 1
+        " TODO: later make it possible to have more than 2 msg on single line
+        " this will require some caching on seen line No and counter which msg
+        " we show right now
+        let msgIndex = (a:direction == "next" ? 1 : 0)
+    endif
+
+    let msg = thisLineMsg[msgIndex]['text']
+    let lnNum = line('.')
+    let ln = getline(lnNum)
+    let column = -1
+
+    if msg =~ '^variable \S\+ '
+        let msgSplit = split(msg)
+        let varname = '\<' . msgSplit[1] . '\>'
+
+        let position = -1
+        let matches = matchstrpos(ln, varname)
+        let origMatches = matches
+
+        while matches[0] != ''
+            let synItem = synIDattr(synID(lnNum, matches[1]+1, 1),"name")
+            "echom join(matches)
+            "echom synItem
+
+            if (synItem == 'elixirId' || synItem == 'elixirArguments')
+                let column = matches[1]
+                break
+            endif
+            let matches = matchstrpos(ln, varname, matches[2])
+        endwhile
+
+        if matches[0] == ''
+            let column = origMatches[1]
+        endif
+    endif
+
+    if column != -1
+        call cursor(lnNum, column+1)
+        normal zz
+    endif
+
+    let s:navigateQuickFixCachedLine = line
+endfunction "}}}
+
+function! s:echoWarning(text) "{{{
+    echohl WarningMsg | echo a:text | echohl None
+endfunction "}}}
+
+function! s:echoNormal(text) "{{{
+    echohl Normal | echo a:text | echohl None
+endfunction "}}}
+
+function! s:echoInfoText(text) "{{{
+    echohl Question | echo a:text | echohl None
+endfunction "}}}
+
+function! s:echoDull(text) "{{{
+    echohl Normal | echo a:text | echohl None
+endfunction "}}}
 
 function! s:setGlobal(name, default) " {{{
   if !exists(a:name)
@@ -685,17 +917,6 @@ function! s:setGlobal(name, default) " {{{
     endif
   endif
 endfunction " }}}
-
-"command! -bar -nargs=* -complete=custom,s:CompleteCheckerName SyntasticCheck call SyntasticCheck(<f-args>)
-"command! -bar -nargs=? -complete=custom,s:CompleteFiletypes   SyntasticInfo  call SyntasticInfo(<f-args>)
-"command! -bar Errors              call SyntasticErrors()
-"command! -bar SyntasticReset      call SyntasticReset()
-"command! -bar SyntasticToggleMode call SyntasticToggleMode()
-"command! -bar SyntasticSetLoclist call SyntasticSetLoclist()
-
-"command! SyntasticJavacEditClasspath runtime! syntax_checkers/java/*.vim | SyntasticJavacEditClasspath
-"command! SyntasticJavacEditConfig    runtime! syntax_checkers/java/*.vim | SyntasticJavacEditConfig
-
 
 " Get the value of a Vim variable.  Allow local variables to override global ones.
 function! s:rawVar(name, ...) abort " {{{
@@ -729,27 +950,35 @@ function s:system(command) abort "{{{
     return out
 endfunction "}}}
 
-" solely for debug
+" solely for debug"{{{
 let s:dump_error_content=''
-function! ShowContent()
+function! vimelixirexunit#testShowContent()
     echo s:dump_error_content
-endfunction
+endfunction "}}}
 
 function! vimelixirexunit#testParseErrorLines(formatType, content, valid) "{{{
-    " utility API just to allow rspec
+    " utility API just to allow rspec access internal formats
     let options = {
                 \ "errorformat": s:ERROR_FORMATS[a:formatType],
-                \ 'target': "llist",
-                \ 'postprocess': function('s:exUnitOutputPostprocess'),
-                \ 'leave_valid': a:valid
+                \ 'target': "llist"
                 \ }
+
+    let options['leave_valid'] = (a:valid =~ 'v')
+    if a:valid !~ 'r'
+        " do not want raw output
+        let options['postprocess'] = function('s:exUnitOutputPostprocess')
+    endif
+
     return s:parseErrorLines(options, a:content)
 endfunction "}}}
 
-augroup ElixirExUnit
+augroup ElixirExUnit " {{{
     au!
     au VimLeave call s:stopJobOnExit()
-augroup END
+    " for now use simple logic to detect files without need to check ALL
+    " extensions saves
+    au BufWritePost *.ex,*.exs call vimelixirexunit#runExUnitWatchAutoRun()
+augroup END " }}}
 
 " vim: set sw=4 sts=4 et fdm=marker:
 "

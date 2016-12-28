@@ -26,8 +26,8 @@ class Buffer
     @vim = vim
   end
 
-  def get_parsed_errors(content, error_type, leave=1)
-    result = @vim.command "echo vimelixirexunit#testParseErrorLines('#{error_type}', #{content.dump}, #{leave})"
+  def get_parsed_errors(content, error_type, leave='v')
+    result = @vim.command "echo vimelixirexunit#testParseErrorLines('#{error_type}', #{content.dump}, #{leave.dump})"
     result.gsub(/ 'bufnr': \d+,/, '').gsub(/ 'pattern': '',/, '')
   end
 
@@ -40,7 +40,7 @@ class Buffer
       result = result.gsub(/\s*$/, '')
 
       if false
-        locresult = @vim.command ":call ShowContent()"
+        locresult = @vim.command ":call vimelixirexunit#testShowContent()"
         @vim.command ":qa!"
         print "---- raw output -\n"
         print locresult
@@ -132,13 +132,13 @@ class Differ
 end
 
 
-RSpec::Matchers.define :be_matching_error do |error_type, expected_result|
+RSpec::Matchers.define :be_matching_error do |error_type, expected_result, options='v'|
   buffer = Buffer.new(VIM, :ex)
 
   expected_result = expected_result.gsub(/\n$/, '')
 
   match do |code|
-    buffer.get_parsed_errors(code, error_type) == expected_result
+    buffer.get_parsed_errors(code, error_type, options) == expected_result
   end
 
   failure_message do |code|
@@ -195,7 +195,7 @@ RSpec::Matchers.define :be_test_output do |command, expected_result|
   buffer = Buffer.new(VIM, :test_exs)
 
   if command == 'ExUnitRunAll'
-    run_command = ":ExUnitRunAll"
+    run_command = ":ExUnitQfRunAll"
   elsif command == "MixCompile11123"
     run_command = ":MixCompile123123"
   end
