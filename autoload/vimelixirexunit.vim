@@ -4,6 +4,11 @@
 " (items with 'x' are done)
 " TODO:
 "
+" - navigation
+"   x jump between source/test files (open, hsplit, vsplit, force_dirs) (\xt, \xs, \xv, \x!)
+"   - allow creation of test file from template (get module name with
+"     alchemist.vim and fill in)
+"
 " - compiler support
 "   x :make runs and shows only compile time errors
 "   - :MixCompile shows errors and warnings
@@ -88,6 +93,7 @@
 let s:BOOT_FINISHED = 0
 
 function! vimelixirexunit#boot() " {{{
+  " TODO: move into if below?
   call vimelixirexunit#setDefaults()
 
   if !s:BOOT_FINISHED
@@ -96,8 +102,9 @@ function! vimelixirexunit#boot() " {{{
   endif
 
   " this happens in each buffer
-  if g:vim_elixir_mix_compile != ''  | call vimelixirexunit#setMixCompileCommand() | endif
-  if g:vim_elixir_exunit_tests != '' | call vimelixirexunit#setExUnitRunCommands() | endif
+  if g:vim_elixir_mix_compile     | call vimelixirexunit#setMixCompileCommand() | endif
+  if g:vim_elixir_exunit_tests    | call vimelixirexunit#setExUnitRunCommands() | endif
+  if g:vim_elixir_exunit_autofind | call vimelixirexunit#setExUnitAutofind()    | endif
 endfunction " }}}
 
 function! vimelixirexunit#setDefaults() "{{{
@@ -112,6 +119,7 @@ function! vimelixirexunit#setDefaults() "{{{
   call s:setGlobal('g:vim_elixir_exunit_async', (v:version >= 800 && !(has("win32") || has("win16"))))
 
   call s:setGlobal('g:vim_elixir_exunit_rerun_on_save', 1)
+  call s:setGlobal('g:vim_elixir_exunit_autofind', 1)
 
   "call s:setGlobal('g:vim_elixir_exunit_symbols', 1)
 
@@ -161,6 +169,103 @@ function! vimelixirexunit#bootGlobal() " {{{
                 \ ""
               \ }
   " }}}
+endfunction " }}}
+
+function vimelixirexunit#setExUnitAutofind() " {{{
+    let mixDir = vimelixirexunit#findMixDirectory()
+
+    command! -bang -nargs=? -buffer ExUnitSwitchBetween call vimelixirexunit#runExUnitAutofind('<bang>', '<args>')
+
+    map <buffer> <Leader>xt :ExUnitSwitchBetween<CR>
+    map <buffer> <Leader>x! :ExUnitSwitchBetween!<CR>
+    map <buffer> <Leader>xs :ExUnitSwitchBetween split<CR>
+    map <buffer> <Leader>xv :ExUnitSwitchBetween vsplit<CR>
+endfunction " }}}
+
+" automatically finds corresponding source or test file
+function vimelixirexunit#runExUnitAutofind(bang, mode) " {{{
+    let mixDir = vimelixirexunit#findMixDirectory()
+
+    " save options and locale env variables
+    let old_cwd = getcwd()
+    execute 'lcd ' . fnameescape(mixDir)
+
+    " relative file name
+    let fileName = expand('%:.')
+    let shortName = expand('%:t:r')
+
+    let openFile = ''
+    let mkDir = ''
+
+    " TODO: extract if clauses to separate function, they are exactly the same
+    if fileName =~ '^lib/.*\.ex$'
+        let testName = shortName . '_test.exs'
+        let prefixDir = fnamemodify(fileName, ":h:s?lib/??")
+
+        " no files found, force open of new one
+        let openFile = 'test/'.prefixDir.'/'.testName
+
+        if !filereadable(openFile)
+            let files = glob('test/**/'.testName, 1, 1)
+            if len(files) == 1
+                " we found exact match
+                let openFile = files[0]
+            elseif len(files) == 0 && a:bang == '!'
+                let mkDir = 'test/'.prefixDir
+            else
+                " we found several tests with same name
+                " and they do not follow dir structure of the source
+                " ignore for now
+                let openFile = ''
+            endif
+        endif
+    elseif fileName =~ '^test/.*_test\.exs$'
+        let srcName = fnamemodify(shortName, ':s?_test??') . '.ex'
+        let prefixDir = fnamemodify(fileName, ":h:s?test/??")
+
+        " no files found, force open of new one
+        let openFile = "lib/".prefixDir."/".srcName
+        if !filereadable(openFile)
+            let files = glob('lib/**/'.srcName, 1, 1)
+            if len(files) == 1
+                " we found exact match
+                let openFile = files[0]
+            elseif len(files) == 0 && a:bang == '!'
+                let mkDir = 'lib/'.prefixDir
+            else
+                " we found several sources with same name
+                " and they do not follow dir structure of the test
+                " ignore for now
+                let openFile = ''
+            endif
+        endif
+    end
+
+    if a:mode == ''
+        let openCmd = 'e'
+    elseif a:mode == 'split'
+        let openCmd = 'sp'
+    elseif a:mode == 'vsplit'
+        let openCmd = 'vs'
+    else
+        return
+    endif
+
+    if openFile != ''
+        "let openFile = fnamemodify(openFile, ':p')
+        if mkDir != ''
+            call mkdir(mkDir, 'p')
+        endif
+        let openFile = fnamemodify(openFile, ':~:.')
+        execute openCmd . ' ' . fnameescape(openFile)
+
+        execute 'lcd ' . fnameescape(old_cwd)
+    else
+        execute 'lcd ' . fnameescape(old_cwd)
+    endif
+
+
+
 endfunction " }}}
 
 " support MixCompile
@@ -816,7 +921,7 @@ endfunction "}}}
 
 let s:navigateQuickFixCachedLine=-1
 function! s:navigateQuickFix(direction) "{{{
-    try 
+    try
         if a:direction == 'next'
             cnext
         elseif a:direction == 'prev'
