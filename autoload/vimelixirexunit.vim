@@ -965,9 +965,10 @@ function! s:navigateQuickFix(direction) "{{{
     let ln = getline(lnNum)
     let column = -1
 
-    if msg =~ '^variable \S\+ '
+    if msg =~ '^variable "\?\S\+"\? '
         let msgSplit = split(msg)
-        let varname = '\<' . msgSplit[1] . '\>'
+        let varName = substitute(msgSplit[1], '"', '', 'g')
+        let varname = '\<' . varName . '\>'
 
         let position = -1
         let matches = matchstrpos(ln, varname)
