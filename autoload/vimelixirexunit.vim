@@ -176,10 +176,10 @@ function vimelixirexunit#setExUnitAutofind() " {{{
 
     command! -bang -nargs=? -buffer ExUnitSwitchBetween call vimelixirexunit#runExUnitAutofind('<bang>', '<args>')
 
-    map <buffer> <Leader>xt :ExUnitSwitchBetween<CR>
-    map <buffer> <Leader>x! :ExUnitSwitchBetween!<CR>
-    map <buffer> <Leader>xs :ExUnitSwitchBetween split<CR>
-    map <buffer> <Leader>xv :ExUnitSwitchBetween vsplit<CR>
+    map <buffer> <Leader>tt :ExUnitSwitchBetween<CR>
+    map <buffer> <Leader>t! :ExUnitSwitchBetween!<CR>
+    map <buffer> <Leader>ts :ExUnitSwitchBetween split<CR>
+    map <buffer> <Leader>tv :ExUnitSwitchBetween vsplit<CR>
 endfunction " }}}
 
 " automatically finds corresponding source or test file
@@ -328,7 +328,7 @@ function vimelixirexunit#setExUnitRunCommands() " {{{
     command! -bar ExUnitWatchRerun call vimelixirexunit#runExUnitWatchCommand('run_again')
     command! -bar ExUnitWatchStop  call vimelixirexunit#runExUnitWatchCommand('stop')
 
-    map <buffer> <Leader>xa :ExUnitQfRunFile<CR>
+    map <buffer> <Leader>xa :ExUnitQfRunAll<CR>
     map <buffer> <Leader>xf :ExUnitQfRunFile<CR>
     map <buffer> <Leader>xl :ExUnitQfRunLine<CR>
     " consider binding this in all buffers, not only in Elixir ones, for

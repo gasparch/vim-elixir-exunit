@@ -1,13 +1,16 @@
 
 # vim-elixir-exunit
 
-Run ExUnit in style :). 
+Run ExUnit tests in style :)
+
 Provides functionality:
  - to detect compilation errors/warnings and jump to them.
- - to detect failing/crashing ExUnit tests and just to correspondign positions.
+ - to detect failing/crashing ExUnit tests and just to corresponding positions.
  - shorthand functions to call ExUnit tests.
+ - running ExUnit tests in separate XTerm window + job control
+ - jumping between test/source file
 
-
+See Vim-Elixir-IDE for provided shortcuts
 
 ## :make support
 
