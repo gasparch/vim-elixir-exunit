@@ -242,7 +242,7 @@ function vimelixirexunit#runExUnitAutofind(bang, mode) " {{{
     end
 
     if a:mode == ''
-        let openCmd = 'e'
+        let openCmd = 'drop'
     elseif a:mode == 'split'
         let openCmd = 'sp'
     elseif a:mode == 'vsplit'
@@ -263,9 +263,6 @@ function vimelixirexunit#runExUnitAutofind(bang, mode) " {{{
     else
         execute 'lcd ' . fnameescape(old_cwd)
     endif
-
-
-
 endfunction " }}}
 
 " support MixCompile
@@ -685,12 +682,8 @@ function! s:pidToIOFileName(pid) "{{{
 endfunction "}}}
 
 function! s:appendToFile(message, file) "{{{
-  silent! new
-  silent! setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted
-  silent! put=a:message
-  silent! normal ggdd
-  silent! execute 'w >>' a:file
-  silent! q
+  let lst = split(a:message, "\n")
+  call writefile(lst, a:file, 'a')
 endfunction "}}}
 
 function! s:changeXTermTitle(title) " {{{
