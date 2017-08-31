@@ -577,7 +577,7 @@ function vimelixirexunit#runExUnitWatchCommand(mode) " {{{
 
     if makeprg == s:runExUnitWatchCommandCache
         " send \n to channel(mix test --listen-on-stdin input) to rerun task
-        call vimelixirexunit#parseJobOutput('reset', 0)
+        call vimelixirexunit#jobOutputReset()
         call s:sendToJob(s:MIX_TEST_JOB, "\n")
     else
         " run make test in background, control it with sending \n when we
@@ -597,7 +597,7 @@ function vimelixirexunit#runExUnitWatchCommand(mode) " {{{
             call s:stopJob(s:MIX_TEST_JOB)
             let s:MIX_TEST_JOB = s:WATCHING_INACTIVE
         endif
-        call vimelixirexunit#parseJobOutput('reset', 0)
+        call vimelixirexunit#jobOutputReset()
         let s:MIX_TEST_JOB = s:runJob(mix_test_options)
         let s:runExUnitWatchCommandCache = makeprg
         let s:runExUnitWatchProjectDir = mixDir
@@ -631,6 +631,14 @@ function! vimelixirexunit#processJobOutput(options, msg) "{{{
     call vimelixirexunit#parseJobOutput(a:options, a:msg)
 endfunction "}}}
 
+
+let s:skipAfterTestOutputEnd = 0
+function! vimelixirexunit#jobOutputReset() " {{{
+    call vimelixirexunit#parseJobOutput('reset', 0)
+    let s:skipAfterTestOutputEnd = 0
+endfunction " }}}
+
+
 function! vimelixirexunit#parseJobOutput(options, msg) "{{{
     if type(a:options) == 1 && a:options == 'reset'
         cexpr []
@@ -649,9 +657,18 @@ function! vimelixirexunit#parseJobOutput(options, msg) "{{{
 endfunction "}}}
 
 function! vimelixirexunit#postToXTerm(options, msg) "{{{
-    if vimelixirexunit#findXTerm()
+    if s:skipAfterTestOutputEnd
+        return
+    endif
+
+    if !s:skipAfterTestOutputEnd && vimelixirexunit#findXTerm()
         " hacking into Linux /proc filesystem
         " will need similar hacks to another OSes
+        "
+        if a:msg =~ "Randomized with seed"
+            let s:skipAfterTestOutputEnd = 1
+        end
+
         let xtermStdin = s:pidToIOFileName(s:XTERM_CAT_PID)
         call s:appendToFile(a:msg, xtermStdin)
     endif
