@@ -175,11 +175,16 @@ function vimelixirexunit#setExUnitAutofind() " {{{
     let mixDir = vimelixirexunit#findMixDirectory()
 
     command! -bang -nargs=? -buffer ExUnitSwitchBetween call vimelixirexunit#runExUnitAutofind('<bang>', '<args>')
+    command! -buffer ExUnitGoToTest call vimelixirexunit#runExUnitGoToTest()
 
     map <buffer> <Leader>tt :ExUnitSwitchBetween<CR>
     map <buffer> <Leader>t! :ExUnitSwitchBetween!<CR>
     map <buffer> <Leader>ts :ExUnitSwitchBetween split<CR>
     map <buffer> <Leader>tv :ExUnitSwitchBetween vsplit<CR>
+
+    " support jumping to last open test
+    map <buffer> <Leader>gt :ExUnitGoToTest<CR>
+    map <buffer> <Leader>tg :ExUnitGoToTest<CR>
 endfunction " }}}
 
 " automatically finds corresponding source or test file
@@ -262,6 +267,24 @@ function vimelixirexunit#runExUnitAutofind(bang, mode) " {{{
         execute 'lcd ' . fnameescape(old_cwd)
     else
         execute 'lcd ' . fnameescape(old_cwd)
+    endif
+endfunction " }}}
+
+function vimelixirexunit#runExUnitGoToTest() " {{{
+    let matches = matchlist(s:runExUnitWatchCommandCache, '\s\(\S\+.exs\)\%(:\(\d\+\)\)\?$')
+    let openCmd = 'e'
+
+    if matches != []
+        let openFile = matches[1]
+        let lineNo = matches[2]
+        if lineNo == ''
+            let openFile = fnamemodify(openFile, ':~:.')
+            execute openCmd . ' ' . fnameescape(openFile)
+        else
+            let openFile = fnamemodify(openFile, ':~:.')
+            execute openCmd . ' ' . fnameescape(openFile)
+            call cursor(lineNo, 1)
+        endif
     endif
 endfunction " }}}
 
