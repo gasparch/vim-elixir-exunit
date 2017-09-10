@@ -197,54 +197,11 @@ function vimelixirexunit#runExUnitAutofind(bang, mode) " {{{
 
     " relative file name
     let fileName = expand('%:.')
-    let shortName = expand('%:t:r')
 
     let openFile = ''
     let mkDir = ''
 
-    " TODO: extract if clauses to separate function, they are exactly the same
-    if fileName =~ '^lib/.*\.ex$'
-        let testName = shortName . '_test.exs'
-        let prefixDir = fnamemodify(fileName, ":h:s?lib/??")
-
-        " no files found, force open of new one
-        let openFile = 'test/'.prefixDir.'/'.testName
-
-        if !filereadable(openFile)
-            let files = glob('test/**/'.testName, 1, 1)
-            if len(files) == 1
-                " we found exact match
-                let openFile = files[0]
-            elseif len(files) == 0 && a:bang == '!'
-                let mkDir = 'test/'.prefixDir
-            else
-                " we found several tests with same name
-                " and they do not follow dir structure of the source
-                " ignore for now
-                let openFile = ''
-            endif
-        endif
-    elseif fileName =~ '^test/.*_test\.exs$'
-        let srcName = fnamemodify(shortName, ':s?_test??') . '.ex'
-        let prefixDir = fnamemodify(fileName, ":h:s?test/??")
-
-        " no files found, force open of new one
-        let openFile = "lib/".prefixDir."/".srcName
-        if !filereadable(openFile)
-            let files = glob('lib/**/'.srcName, 1, 1)
-            if len(files) == 1
-                " we found exact match
-                let openFile = files[0]
-            elseif len(files) == 0 && a:bang == '!'
-                let mkDir = 'lib/'.prefixDir
-            else
-                " we found several sources with same name
-                " and they do not follow dir structure of the test
-                " ignore for now
-                let openFile = ''
-            endif
-        endif
-    end
+    let [openFile, mkDir, fileType] = s:findFilePair(fileName)
 
     if a:mode == ''
         let openCmd = 'drop'
@@ -268,6 +225,62 @@ function vimelixirexunit#runExUnitAutofind(bang, mode) " {{{
     else
         execute 'lcd ' . fnameescape(old_cwd)
     endif
+endfunction " }}}
+
+function s:findFilePair(fileName) "{{{
+    let fileName = a:fileName
+
+    let shortName = fnamemodify(a:fileName, ':t:r')
+
+    let mkDir = ''
+    let fileType = -1
+
+    if fileName =~ '^lib/.*\.ex$'
+        let fileType = 'test'
+        let testName = shortName . '_test.exs'
+        let prefixDir = fnamemodify(fileName, ":h:s?lib/??")
+
+        " no files found, force open of new one
+        let openFile = 'test/'.prefixDir.'/'.testName
+
+        if !filereadable(openFile)
+            let files = glob('test/**/'.testName, 1, 1)
+            if len(files) == 1
+                " we found exact match
+                let openFile = files[0]
+            elseif len(files) == 0 && a:bang == '!'
+                let mkDir = 'test/'.prefixDir
+            else
+                " we found several tests with same name
+                " and they do not follow dir structure of the source
+                " ignore for now
+                let openFile = ''
+            endif
+        endif
+    elseif fileName =~ '^test/.*_test\.exs$'
+        let fileType = 'src'
+        let srcName = fnamemodify(shortName, ':s?_test??') . '.ex'
+        let prefixDir = fnamemodify(fileName, ":h:s?test/??")
+
+        " no files found, force open of new one
+        let openFile = "lib/".prefixDir."/".srcName
+        if !filereadable(openFile)
+            let files = glob('lib/**/'.srcName, 1, 1)
+            if len(files) == 1
+                " we found exact match
+                let openFile = files[0]
+            elseif len(files) == 0 && a:bang == '!'
+                let mkDir = 'lib/'.prefixDir
+            else
+                " we found several sources with same name
+                " and they do not follow dir structure of the test
+                " ignore for now
+                let openFile = ''
+            endif
+        endif
+    end
+
+    return [openFile, mkDir, fileType]
 endfunction " }}}
 
 function vimelixirexunit#runExUnitGoToTest() " {{{
@@ -376,6 +389,17 @@ function vimelixirexunit#setExUnitRunCommands() " {{{
 
 endfunction " }}}
 
+function s:ensureTestFile(mode) " {{{
+    if g:vim_elixir_exunit_autofind && (a:mode == 'file' || a:mode == 'line')
+        let fileName = expand("%:f")
+        let [openFile, mkDir, fileType] = s:findFilePair(fileName)
+
+        if fileType == 'test'
+            exec 'e ' . openFile
+        endif
+    endif
+endfunction " }}}
+
 function s:getMakeprg(mode, mixDir, mixCmd) " {{{
     if a:mode == 'all'
         let makeprg = a:mixCmd
@@ -406,6 +430,7 @@ function! vimelixirexunit#runExUnitRunCommand(mode) " {{{
             return
         endif
     else
+        call s:ensureTestFile(a:mode)
         let makeprg = s:getMakeprg(a:mode, mixDir, s:MAKEPRG_MIX_RUN)
         let s:runExUnitRunCommandCache = makeprg
     endif
@@ -590,6 +615,7 @@ function vimelixirexunit#runExUnitWatchCommand(mode) " {{{
             return
         endif
     else
+        call s:ensureTestFile(a:mode)
         let makeprg = s:getMakeprg(a:mode, mixDir, mixCmd)
     endif
 
